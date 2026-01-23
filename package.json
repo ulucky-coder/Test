@@ -1,0 +1,25 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "Supabase integration with n8n workflow automation",
+  "main": "src/supabase/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ulucky-coder/Test"
+  },
+  "keywords": [
+    "supabase",
+    "n8n",
+    "mcp",
+    "workflow",
+    "automation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.91.0"
+  }
+}

@@ -17,32 +17,39 @@ This repository integrates with n8n workflow automation via MCP (Model Context P
 
 ```
 /home/user/Test/
-├── .git/              # Git version control
-├── .gitignore         # Git ignore patterns
-├── .mcp.json          # MCP server configuration
-└── CLAUDE.md          # This file - AI assistant guidelines
+├── .git/                    # Git version control
+├── .gitignore               # Git ignore patterns
+├── .mcp.json                # MCP server configuration
+├── CLAUDE.md                # This file - AI assistant guidelines
+├── package.json             # npm package configuration
+├── node_modules/            # npm dependencies
+└── src/
+    └── supabase/            # Supabase integration modules
+        ├── index.js         # Main export file
+        ├── client.js        # Supabase client configuration
+        ├── data.js          # CRUD operations (read, insert, update, delete)
+        ├── auth.js          # Authentication operations
+        ├── realtime.js      # Realtime subscriptions
+        └── storage.js       # File storage operations
 ```
 
-### Directory Conventions (To Be Established)
-
-As the project grows, document the directory structure here. Common patterns:
+### Directory Conventions
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/` | Source code |
-| `tests/` | Test files |
+| `src/supabase/` | Supabase client and operation modules |
+| `tests/` | Test files (to be added) |
 | `docs/` | Documentation |
 | `scripts/` | Utility scripts |
-| `config/` | Configuration files |
 
 ## Technology Stack
 
+- **Backend:** Supabase (PostgreSQL, Auth, Realtime, Storage)
 - **MCP Integration:** n8n-mcp (Model Context Protocol server for n8n)
 - **Automation:** n8n workflow automation (https://ulucky.app.n8n.cloud)
-- **Language:** TBD
-- **Framework:** TBD
-- **Package Manager:** npm/npx (for MCP server)
-- **Build System:** TBD
+- **Language:** JavaScript (Node.js)
+- **Package Manager:** npm
+- **Dependencies:** @supabase/supabase-js
 - **Testing Framework:** TBD
 
 ## Development Workflow
@@ -51,23 +58,42 @@ As the project grows, document the directory structure here. Common patterns:
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/ulucky-coder/Test.git
 cd Test
 
-# Install dependencies (update when package manager is chosen)
-# npm install / pip install -r requirements.txt / etc.
+# Install dependencies
+npm install
+
+# Set environment variables
+export SUPABASE_URL="your-supabase-url"
+export SUPABASE_ANON_KEY="your-anon-key"
+export SUPABASE_SERVICE_KEY="your-service-key"  # Optional, for admin operations
 ```
 
 ### Common Commands
 
-> Add project-specific commands as they are established.
-
 | Command | Description |
 |---------|-------------|
-| TBD | Build the project |
-| TBD | Run tests |
-| TBD | Start development server |
-| TBD | Lint/format code |
+| `npm install` | Install dependencies |
+| `npm test` | Run tests |
+
+### Usage Example
+
+```javascript
+const { read, insert, auth, storage } = require('./src/supabase');
+
+// Read data
+const users = await read('users', { limit: 10 });
+
+// Insert data
+await insert('users', { name: 'John', email: 'john@example.com' });
+
+// Authentication
+await auth.signIn('user@example.com', 'password');
+
+// Storage
+await storage.upload('avatars', 'user1.png', fileBuffer);
+```
 
 ### Git Workflow
 
@@ -155,6 +181,9 @@ cd Test
 
 | Variable | Description | Required |
 |----------|-------------|----------|
+| `SUPABASE_URL` | Supabase project URL | Yes |
+| `SUPABASE_ANON_KEY` | Supabase anonymous/public key | Yes |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key (admin) | No |
 | `N8N_API_KEY` | API key for n8n cloud instance | Yes |
 
 **Note:** Never commit API keys to the repository. Set environment variables locally or use a secrets manager.
@@ -188,6 +217,8 @@ The n8n-mcp server provides workflow automation capabilities through the n8n pla
 - n8n Cloud Instance: https://ulucky.app.n8n.cloud
 - n8n Documentation: https://docs.n8n.io
 - n8n-mcp: MCP server for n8n integration
+- Supabase Documentation: https://supabase.com/docs
+- Supabase JS Client: https://supabase.com/docs/reference/javascript
 
 ---
 
