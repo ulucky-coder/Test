@@ -1,0 +1,27 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# API keys should never be committed
+*.key
+secrets/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/

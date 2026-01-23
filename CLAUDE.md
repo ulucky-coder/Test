@@ -5,10 +5,10 @@
 ## Repository Overview
 
 **Project Name:** Test
-**Status:** New/Empty Repository
+**Status:** Initial Setup
 **Last Updated:** 2026-01-23
 
-This is a newly initialized repository. Update this section as the project develops with:
+This repository integrates with n8n workflow automation via MCP (Model Context Protocol). Update this section as the project develops with:
 - Project purpose and goals
 - Target audience/users
 - Key features
@@ -18,8 +18,9 @@ This is a newly initialized repository. Update this section as the project devel
 ```
 /home/user/Test/
 ├── .git/              # Git version control
-├── CLAUDE.md          # This file - AI assistant guidelines
-└── (empty)            # Add project files here
+├── .gitignore         # Git ignore patterns
+├── .mcp.json          # MCP server configuration
+└── CLAUDE.md          # This file - AI assistant guidelines
 ```
 
 ### Directory Conventions (To Be Established)
@@ -36,11 +37,11 @@ As the project grows, document the directory structure here. Common patterns:
 
 ## Technology Stack
 
-> Update this section when technologies are added to the project.
-
+- **MCP Integration:** n8n-mcp (Model Context Protocol server for n8n)
+- **Automation:** n8n workflow automation (https://ulucky.app.n8n.cloud)
 - **Language:** TBD
 - **Framework:** TBD
-- **Package Manager:** TBD
+- **Package Manager:** npm/npx (for MCP server)
 - **Build System:** TBD
 - **Testing Framework:** TBD
 
@@ -152,11 +153,25 @@ cd Test
 
 ### Environment Variables
 
-> List required environment variables here.
-
 | Variable | Description | Required |
 |----------|-------------|----------|
-| TBD | TBD | TBD |
+| `N8N_API_KEY` | API key for n8n cloud instance | Yes |
+
+**Note:** Never commit API keys to the repository. Set environment variables locally or use a secrets manager.
+
+### MCP Configuration
+
+The project uses Model Context Protocol (MCP) for AI tool integration. Configuration is in `.mcp.json`:
+
+```bash
+# Quick setup with Claude CLI
+claude mcp add n8n-mcp
+
+# Set your API key as environment variable
+export N8N_API_KEY="your-api-key-here"
+```
+
+The n8n-mcp server provides workflow automation capabilities through the n8n platform.
 
 ## Troubleshooting
 
@@ -170,8 +185,9 @@ cd Test
 ## Resources
 
 - Repository: [ulucky-coder/Test](https://github.com/ulucky-coder/Test)
-- (Add documentation links)
-- (Add related resources)
+- n8n Cloud Instance: https://ulucky.app.n8n.cloud
+- n8n Documentation: https://docs.n8n.io
+- n8n-mcp: MCP server for n8n integration
 
 ---
 
