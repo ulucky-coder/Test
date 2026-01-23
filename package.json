@@ -4,7 +4,8 @@
   "description": "Supabase integration with n8n workflow automation",
   "main": "src/supabase/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "workflows": "node scripts/list-workflows.js"
   },
   "repository": {
     "type": "git",
