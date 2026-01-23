@@ -2,13 +2,14 @@
   "mcpServers": {
     "n8n-mcp": {
       "command": "npx",
-      "args": ["n8n-mcp"],
-      "env": {
-        "MCP_MODE": "stdio",
-        "LOG_LEVEL": "error",
-        "N8N_API_URL": "https://ulucky.app.n8n.cloud/api/v1",
-        "N8N_API_KEY": "${N8N_API_KEY}"
-      }
+      "args": [
+        "-y",
+        "supergateway",
+        "--streamableHttp",
+        "https://ulucky.app.n8n.cloud/mcp-server/http",
+        "--header",
+        "authorization:Bearer ${N8N_MCP_TOKEN}"
+      ]
     }
   }
 }
