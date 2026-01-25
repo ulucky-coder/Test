@@ -7,6 +7,7 @@
 # API keys should never be committed
 *.key
 secrets/
+credentials/
 
 # IDE and editor files
 .idea/
