@@ -1,0 +1,250 @@
+{
+  "name": "HR Bot - 11 Google Sheets Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "minutes", "minutesInterval": 30}]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "schedule-trigger",
+      "name": "Every 30 Minutes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  ac.id,\n  ac.fullname,\n  ac.age,\n  ac.citizenship,\n  ac.phone,\n  ac.experience,\n  ac.language_preference,\n  ac.documents_status,\n  ac.created_at,\n  v.position_name as vacancy\nFROM approved_candidates ac\nLEFT JOIN vacancies v ON v.id = ac.vacancy_id\nWHERE ac.synced_to_sheets IS NULL OR ac.synced_to_sheets = false\nORDER BY ac.created_at DESC\nLIMIT 100",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "id": "load-new-approved",
+      "name": "Load New Approved",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  rc.id,\n  rc.fullname,\n  rc.age,\n  rc.citizenship,\n  rc.rejection_reason,\n  rc.created_at\nFROM rejected_candidates rc\nWHERE rc.synced_to_sheets IS NULL OR rc.synced_to_sheets = false\nORDER BY rc.created_at DESC\nLIMIT 100",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 200],
+      "id": "load-new-rejected",
+      "name": "Load New Rejected",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const approved = $('Load New Approved').all().map(i => i.json).filter(i => i.id);\nconst rejected = $('Load New Rejected').all().map(i => i.json).filter(i => i.id);\n\nconst formatDate = (d) => d ? new Date(d).toLocaleString('ru-RU') : '';\n\n// Форматируем для Google Sheets\nconst approvedRows = approved.map(c => ({\n  id: c.id,\n  fullname: c.fullname || '',\n  age: c.age || '',\n  citizenship: c.citizenship || '',\n  phone: c.phone || '',\n  experience: c.experience || '',\n  language: c.language_preference || '',\n  documents: c.documents_status || '',\n  vacancy: c.vacancy || '',\n  date: formatDate(c.created_at),\n  status: 'Одобрен'\n}));\n\nconst rejectedRows = rejected.map(c => ({\n  id: c.id,\n  fullname: c.fullname || '',\n  age: c.age || '',\n  citizenship: c.citizenship || '',\n  phone: '',\n  experience: '',\n  language: '',\n  documents: '',\n  vacancy: '',\n  date: formatDate(c.created_at),\n  status: 'Отклонён',\n  rejection_reason: c.rejection_reason || ''\n}));\n\nreturn {\n  approved: approvedRows,\n  rejected: rejectedRows,\n  approved_ids: approved.map(c => c.id),\n  rejected_ids: rejected.map(c => c.id),\n  total_new: approvedRows.length + rejectedRows.length\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 100],
+      "id": "format-data",
+      "name": "Format for Sheets"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.total_new }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [720, 100],
+      "id": "check-new-data",
+      "name": "Has New Data?"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Одобренные"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ID": "={{ $json.approved[0].id }}",
+            "ФИО": "={{ $json.approved[0].fullname }}",
+            "Возраст": "={{ $json.approved[0].age }}",
+            "Гражданство": "={{ $json.approved[0].citizenship }}",
+            "Телефон": "={{ $json.approved[0].phone }}",
+            "Опыт": "={{ $json.approved[0].experience }}",
+            "Язык": "={{ $json.approved[0].language }}",
+            "Документы": "={{ $json.approved[0].documents }}",
+            "Вакансия": "={{ $json.approved[0].vacancy }}",
+            "Дата": "={{ $json.approved[0].date }}"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [940, 0],
+      "id": "append-approved",
+      "name": "Append Approved to Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Отклонённые"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ID": "={{ $json.rejected[0].id }}",
+            "ФИО": "={{ $json.rejected[0].fullname }}",
+            "Возраст": "={{ $json.rejected[0].age }}",
+            "Гражданство": "={{ $json.rejected[0].citizenship }}",
+            "Причина": "={{ $json.rejected[0].rejection_reason }}",
+            "Дата": "={{ $json.rejected[0].date }}"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [940, 200],
+      "id": "append-rejected",
+      "name": "Append Rejected to Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIAL_ID",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approved_candidates SET synced_to_sheets = true WHERE id = ANY($1::uuid[])",
+        "options": {
+          "queryReplacement": "={{ [$json.approved_ids] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1160, 0],
+      "id": "mark-approved-synced",
+      "name": "Mark Approved Synced",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE rejected_candidates SET synced_to_sheets = true WHERE id = ANY($1::uuid[])",
+        "options": {
+          "queryReplacement": "={{ [$json.rejected_ids] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1160, 200],
+      "id": "mark-rejected-synced",
+      "name": "Mark Rejected Synced",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {"node": "Load New Approved", "type": "main", "index": 0},
+          {"node": "Load New Rejected", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Load New Approved": {
+      "main": [[{"node": "Format for Sheets", "type": "main", "index": 0}]]
+    },
+    "Load New Rejected": {
+      "main": [[{"node": "Format for Sheets", "type": "main", "index": 0}]]
+    },
+    "Format for Sheets": {
+      "main": [[{"node": "Has New Data?", "type": "main", "index": 0}]]
+    },
+    "Has New Data?": {
+      "main": [
+        [
+          {"node": "Append Approved to Sheets", "type": "main", "index": 0},
+          {"node": "Append Rejected to Sheets", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Append Approved to Sheets": {
+      "main": [[{"node": "Mark Approved Synced", "type": "main", "index": 0}]]
+    },
+    "Append Rejected to Sheets": {
+      "main": [[{"node": "Mark Rejected Synced", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "HR Bot"}, {"name": "Google Sheets"}, {"name": "Sync"}],
+  "meta": {
+    "instanceId": "hr-bot-sheets-sync"
+  }
+}

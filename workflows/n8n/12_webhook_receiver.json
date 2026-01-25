@@ -1,0 +1,108 @@
+{
+  "name": "HR Bot - 12 Status Change Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "status-change",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "webhook-trigger",
+      "name": "Status Change Webhook",
+      "webhookId": "status-change"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json;\n\nconst event = payload.event || 'UNKNOWN';\nconst table = payload.table || 'unknown';\nconst record = payload.record || {};\nconst timestamp = payload.timestamp || new Date().toISOString();\n\n// Форматируем сообщение в зависимости от события\nlet message = '';\nlet emoji = '📢';\n\nswitch (table) {\n  case 'approved_candidates':\n    emoji = '✅';\n    message = `${emoji} НОВЫЙ ОДОБРЕННЫЙ КАНДИДАТ\\n\\n`;\n    message += `👤 ФИО: ${record.fullname || 'Не указано'}\\n`;\n    message += `📅 Возраст: ${record.age || 'Не указан'}\\n`;\n    message += `🌍 Гражданство: ${record.citizenship || 'Не указано'}\\n`;\n    message += `📞 Телефон: ${record.phone || 'Не указан'}\\n`;\n    message += `💼 Опыт: ${record.experience || 'Не указан'}\\n`;\n    message += `\\n⏰ ${new Date(timestamp).toLocaleString('ru-RU')}`;\n    break;\n    \n  case 'rejected_candidates':\n    emoji = '❌';\n    message = `${emoji} КАНДИДАТ ОТКЛОНЁН\\n\\n`;\n    message += `👤 ФИО: ${record.fullname || 'Не указано'}\\n`;\n    message += `📝 Причина: ${record.rejection_reason || 'Не указана'}\\n`;\n    message += `\\n⏰ ${new Date(timestamp).toLocaleString('ru-RU')}`;\n    break;\n    \n  case 'candidate_sessions':\n    emoji = '🔄';\n    message = `${emoji} СТАТУС СЕССИИ ИЗМЕНЁН\\n\\n`;\n    message += `👤 ID: ${record.telegram_user_id || ''}\\n`;\n    message += `📊 Новый статус: ${record.status || 'Не указан'}\\n`;\n    message += `\\n⏰ ${new Date(timestamp).toLocaleString('ru-RU')}`;\n    break;\n    \n  default:\n    message = `${emoji} Событие: ${event} в таблице ${table}\\n`;\n    message += `Данные: ${JSON.stringify(record, null, 2)}`;\n}\n\nreturn {\n  message: message,\n  event: event,\n  table: table,\n  record_id: record.id,\n  should_notify: table === 'approved_candidates' || table === 'rejected_candidates'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "format-notification",
+      "name": "Format Notification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [440, 0],
+      "id": "filter-important",
+      "name": "Is Important?"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "send-to-hr-group",
+      "name": "Notify HR Group",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {success: true, processed: $json.event, table: $json.table} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [880, 0],
+      "id": "respond-ok",
+      "name": "Respond OK"
+    }
+  ],
+  "connections": {
+    "Status Change Webhook": {
+      "main": [[{"node": "Format Notification", "type": "main", "index": 0}]]
+    },
+    "Format Notification": {
+      "main": [[{"node": "Is Important?", "type": "main", "index": 0}]]
+    },
+    "Is Important?": {
+      "main": [[{"node": "Notify HR Group", "type": "main", "index": 0}]]
+    },
+    "Notify HR Group": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "HR Bot"}, {"name": "Webhook"}, {"name": "Notifications"}],
+  "meta": {
+    "instanceId": "hr-bot-webhook"
+  }
+}

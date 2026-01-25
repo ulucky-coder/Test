@@ -1,0 +1,131 @@
+{
+  "name": "HR Bot - 09 Analytics Dashboard",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "hours", "hoursInterval": 1}]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "schedule-trigger",
+      "name": "Every Hour"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics_summary",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "id": "load-summary",
+      "name": "Load Summary",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics_candidates_daily LIMIT 7",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 200],
+      "id": "load-daily",
+      "name": "Load Daily Stats",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics_funnel",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 400],
+      "id": "load-funnel",
+      "name": "Load Funnel",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const summary = $('Load Summary').first().json;\nconst daily = $('Load Daily Stats').all().map(i => i.json);\nconst funnel = $('Load Funnel').all().map(i => i.json);\n\nconst today = new Date().toLocaleDateString('ru-RU');\n\nlet message = `📊 HR BOT АНАЛИТИКА\\n${today}\\n\\n`;\n\nmessage += `=== СВОДКА ===\\n`;\nmessage += `📅 Сегодня: ${summary.today_total || 0} кандидатов\\n`;\nmessage += `📆 За неделю: ${summary.week_total || 0} кандидатов\\n`;\nmessage += `📈 За месяц: ${summary.month_total || 0} кандидатов\\n\\n`;\n\nmessage += `✅ Одобрено сегодня: ${summary.today_approved || 0}\\n`;\nmessage += `✅ Одобрено за неделю: ${summary.week_approved || 0}\\n`;\nmessage += `❌ Отклонено за неделю: ${summary.week_rejected || 0}\\n\\n`;\n\nmessage += `🔄 Активных сессий: ${summary.active_sessions || 0}\\n`;\nmessage += `💼 Активных вакансий: ${summary.active_vacancies || 0}\\n\\n`;\n\nmessage += `=== ВОРОНКА (30 дней) ===\\n`;\nfunnel.forEach(f => {\n  message += `${f.stage}: ${f.count}\\n`;\n});\n\nreturn {\n  message: message,\n  summary: summary,\n  daily: daily,\n  funnel: funnel\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 200],
+      "id": "format-report",
+      "name": "Format Report"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, 200],
+      "id": "send-to-hr",
+      "name": "Send to HR Group",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {"node": "Load Summary", "type": "main", "index": 0},
+          {"node": "Load Daily Stats", "type": "main", "index": 0},
+          {"node": "Load Funnel", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Load Summary": {
+      "main": [[{"node": "Format Report", "type": "main", "index": 0}]]
+    },
+    "Load Daily Stats": {
+      "main": [[{"node": "Format Report", "type": "main", "index": 0}]]
+    },
+    "Load Funnel": {
+      "main": [[{"node": "Format Report", "type": "main", "index": 0}]]
+    },
+    "Format Report": {
+      "main": [[{"node": "Send to HR Group", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "HR Bot"}, {"name": "Analytics"}],
+  "meta": {
+    "instanceId": "hr-bot-analytics"
+  }
+}

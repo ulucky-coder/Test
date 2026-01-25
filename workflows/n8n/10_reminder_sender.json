@@ -1,0 +1,173 @@
+{
+  "name": "HR Bot - 10 Reminder Sender",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "hours", "hoursInterval": 6}]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "schedule-trigger",
+      "name": "Every 6 Hours"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM inactive_candidates WHERE hours_inactive BETWEEN 24 AND 72 LIMIT 50",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "id": "load-inactive",
+      "name": "Load Inactive Candidates",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.telegram_user_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [440, 0],
+      "id": "filter-valid",
+      "name": "Filter Valid"
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidate = $json;\nconst language = candidate.language || 'ru';\nconst firstName = candidate.first_name || '';\nconst hoursInactive = Math.round(candidate.hours_inactive || 0);\n\n// Сообщения на разных языках\nconst messages = {\n  ru: `Привет${firstName ? ', ' + firstName : ''}! 👋\\n\\nМы заметили, что вы начали заполнять анкету, но не закончили.\\n\\nУ нас есть отличные вакансии специально для вас! 🌟\\n\\nПродолжим? Просто напишите любое сообщение, и я помогу вам дальше.`,\n  \n  kg: `Салам${firstName ? ', ' + firstName : ''}! 👋\\n\\nСиз анкетаны толтура баштаганыңызды байкадык, бирок бүтүрө элексиз.\\n\\nБизде сиз үчүн эң сонун вакансиялар бар! 🌟\\n\\nУлантабызбы? Жөн гана каалаган билдирүү жазыңыз.`,\n  \n  uz: `Salom${firstName ? ', ' + firstName : ''}! 👋\\n\\nSiz anketani to'ldirishni boshlaganingizni ko'rdik, lekin tugatmadingiz.\\n\\nBizda siz uchun ajoyib ish o'rinlari bor! 🌟\\n\\nDavom etamizmi? Shunchaki istalgan xabar yozing.`,\n  \n  tj: `Салом${firstName ? ', ' + firstName : ''}! 👋\\n\\nМо дидем, ки шумо пуркунии анкетаро оғоз кардед, вале ба охир нарасондед.\\n\\nМо барои шумо ҷойҳои кории олӣ дорем! 🌟\\n\\nИдома медиҳем? Танҳо ягон паём нависед.`\n};\n\nconst message = messages[language] || messages.ru;\n\nreturn {\n  telegram_user_id: candidate.telegram_user_id,\n  session_id: candidate.session_id,\n  message: message,\n  language: language,\n  hours_inactive: hoursInactive\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "id": "prepare-message",
+      "name": "Prepare Reminder Message"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_user_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 0],
+      "id": "send-reminder",
+      "name": "Send Reminder",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO n8n_chat_histories (session_id, bot_response, created_at, message_type) VALUES ($1::uuid, $2, NOW(), 'reminder')",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, 'Напоминание отправлено'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1100, 0],
+      "id": "log-reminder",
+      "name": "Log Reminder",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3.1,
+      "position": [440, 200],
+      "id": "rate-limit",
+      "name": "Rate Limit (1 per second)"
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1100, 200],
+      "id": "wait-1s",
+      "name": "Wait 1s"
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [[{"node": "Load Inactive Candidates", "type": "main", "index": 0}]]
+    },
+    "Load Inactive Candidates": {
+      "main": [[{"node": "Filter Valid", "type": "main", "index": 0}]]
+    },
+    "Filter Valid": {
+      "main": [[{"node": "Rate Limit (1 per second)", "type": "main", "index": 0}]]
+    },
+    "Rate Limit (1 per second)": {
+      "main": [
+        [{"node": "Prepare Reminder Message", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Prepare Reminder Message": {
+      "main": [[{"node": "Send Reminder", "type": "main", "index": 0}]]
+    },
+    "Send Reminder": {
+      "main": [[{"node": "Log Reminder", "type": "main", "index": 0}]]
+    },
+    "Log Reminder": {
+      "main": [[{"node": "Wait 1s", "type": "main", "index": 0}]]
+    },
+    "Wait 1s": {
+      "main": [[{"node": "Rate Limit (1 per second)", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [{"name": "HR Bot"}, {"name": "Reminders"}],
+  "meta": {
+    "instanceId": "hr-bot-reminders"
+  }
+}
