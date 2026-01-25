@@ -30,7 +30,8 @@
         "rule": {
           "interval": [
             {
-              "field": "cronExpression"
+              "field": "cronExpression",
+              "expression": "0 20 * * *"
             }
           ]
         }
@@ -643,7 +644,7 @@
         "operation": "executeQuery",
         "query": "SELECT * FROM get_monthly_stats($1::BIGINT);\n",
         "options": {
-          "queryReplacement": "={{ [$json.chat_id] }}"
+          "queryReplacement": "={{ [$json.chatId] }}"
         }
       },
       "id": "2945ec4c-ea31-4624-8fe4-47fde52a65ba",
@@ -860,7 +861,9 @@
                 "buttons": [
                   {
                     "text": "🤖 Совет от ИИ",
-                    "additionalFields": {}
+                    "additionalFields": {
+                      "callback_data": "ai_advice"
+                    }
                   }
                 ]
               }
@@ -1111,7 +1114,7 @@
         "operation": "executeQuery",
         "query": "SELECT * FROM get_yesterday_expenses($1);",
         "options": {
-          "queryReplacement": "={{ [$json.chat_id] }}"
+          "queryReplacement": "={{ [$json.chatId] }}"
         }
       },
       "id": "c669b7c9-679a-414c-b3b1-71da102c9516",
