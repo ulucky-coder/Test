@@ -1,0 +1,74 @@
+{
+  "name": "HR Bot - 04d Escalation Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ESCALATION HANDLER: Prepare Response (v3.0)\n// ============================================================\n\nconst context = $json;\n\nconst responseMessage = '🤝 Это важный вопрос. Мне нужно уточнить детали у руководства.\\n\\nЯ передал ваш вопрос HR-специалисту. Вам ответят в ближайшее время!\\n\\nА пока можем продолжить знакомство — расскажите о себе! 😊';\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  known_data: context.known_data,\n  language: context.language,\n  route_category: context.route_category,\n  first_name: context.first_name,\n  \n  // Response\n  response_message: responseMessage,\n  final_message: responseMessage,\n  extracted_data: context.known_data || {},\n  interview_complete: false,\n  show_language_buttons: false,\n  needs_escalation: true,\n  \n  // HR notification data\n  hr_notification: {\n    type: 'escalation',\n    message: `🆘 ЭСКАЛАЦИЯ\\n\\n👤 Кандидат: ${context.first_name || context.known_data?.first_name || 'Неизвестно'}\\n💬 Вопрос: ${context.user_message}\\n\\n⚠️ Требуется ответ HR`,\n    user_id: context.user_id,\n    chat_id: context.chat_id\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "prepare-escalation",
+      "name": "Prepare Escalation"
+    },
+    {
+      "parameters": {
+        "chatId": "-1003410305192",
+        "text": "={{ $json.hr_notification.message }}\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать кандидату</a>",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [440, 0],
+      "id": "notify-hr-escalation",
+      "name": "Notify HR - Escalation",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "call-response-sender",
+      "name": "Call Response Sender",
+      "notes": "05_response_sender"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "Prepare Escalation", "type": "main", "index": 0}]]
+    },
+    "Prepare Escalation": {
+      "main": [[{"node": "Notify HR - Escalation", "type": "main", "index": 0}]]
+    },
+    "Notify HR - Escalation": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Handler"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

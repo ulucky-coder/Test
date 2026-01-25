@@ -1,0 +1,88 @@
+{
+  "name": "HR Bot - 04a Greeting Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.user_message }}",
+        "options": {
+          "systemMessage": "Ты — приветственный бот рекрутера BestHotel. 🏨\n\nТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА: Поприветствовать нового кандидата и предложить выбрать язык общения.\n\nОтветь ТОЛЬКО JSON без markdown:\n{\n  \"message\": \"Здравствуйте! 👋 Добро пожаловать в BestHotel!\\n\\nЯ помогу вам узнать о наших вакансиях и пройти собеседование. 🤝\\n\\nВыберите язык общения:\",\n  \"show_language_buttons\": true,\n  \"extracted_data\": {},\n  \"interview_complete\": false\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [220, 0],
+      "id": "greeting-agent",
+      "name": "Greeting Agent"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.7
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [220, 200],
+      "id": "deepseek-greeting",
+      "name": "DeepSeek Greeting",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "g1KQFdKf5EC4OIiO",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем ответ Greeting Agent\nconst context = $('Execute Workflow Trigger').first().json;\nconst response = $json;\n\nlet parsed = {\n  message: 'Здравствуйте! 👋 Добро пожаловать в BestHotel!\\n\\nЯ помогу вам узнать о наших вакансиях и пройти собеседование. 🤝\\n\\nВыберите язык общения:',\n  show_language_buttons: true,\n  extracted_data: {},\n  interview_complete: false\n};\n\ntry {\n  const rawOutput = response.text || response.output || response.content || '';\n  const cleanJson = String(rawOutput)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Greeting parse error:', e.message);\n}\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  known_data: context.known_data,\n  language: context.language,\n  route_category: context.route_category,\n  \n  // Response\n  response_message: parsed.message,\n  final_message: parsed.message,\n  extracted_data: parsed.extracted_data || {},\n  interview_complete: false,\n  show_language_buttons: true,\n  needs_escalation: false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "format-response",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "call-response-sender",
+      "name": "Call Response Sender",
+      "notes": "05_response_sender"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "Greeting Agent", "type": "main", "index": 0}]]
+    },
+    "DeepSeek Greeting": {
+      "ai_languageModel": [[{"node": "Greeting Agent", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Greeting Agent": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+    },
+    "Format Response": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Agent"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}
