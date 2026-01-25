@@ -322,6 +322,154 @@ Workflows are stored in `workflows/n8n/` as JSON files. See `workflows/n8n/READM
 
 **File naming:** Use kebab-case (e.g., `budget-bot.json`)
 
+## Working with n8n Workflows (AI Assistant Guide)
+
+Папка `workflows/n8n/` содержит экспортированные воркфлоу n8n в формате JSON. AI-ассистент может читать, анализировать и модифицировать эти файлы.
+
+### Структура JSON воркфлоу
+
+```json
+{
+  "name": "Workflow Name",           // Название воркфлоу
+  "nodes": [...],                    // Массив нод (узлов)
+  "connections": {...},              // Связи между нодами
+  "settings": {...},                 // Настройки воркфлоу
+  "active": false,                   // Активен ли воркфлоу
+  "id": "workflow-id",               // Уникальный ID
+  "tags": [...]                      // Теги для организации
+}
+```
+
+### Структура ноды (node)
+
+```json
+{
+  "id": "unique-node-id",
+  "name": "Node Display Name",
+  "type": "n8n-nodes-base.nodetype",  // Тип ноды
+  "typeVersion": 1.2,
+  "position": [x, y],                  // Позиция на канвасе
+  "parameters": {...},                 // Параметры ноды
+  "credentials": {...},                // Учётные данные (если нужны)
+  "onError": "continueRegularOutput",  // Поведение при ошибке
+  "retryOnFail": true,                 // Повторять при ошибке
+  "maxTries": 3                        // Макс. попыток
+}
+```
+
+### Основные типы нод
+
+| Тип ноды | Описание |
+|----------|----------|
+| `n8n-nodes-base.telegramTrigger` | Триггер входящих сообщений Telegram |
+| `n8n-nodes-base.telegram` | Отправка сообщений в Telegram |
+| `n8n-nodes-base.postgres` | SQL-запросы к PostgreSQL |
+| `n8n-nodes-base.redis` | Операции с Redis (кэш/состояние) |
+| `n8n-nodes-base.code` | JavaScript код |
+| `n8n-nodes-base.if` | Условное ветвление |
+| `n8n-nodes-base.switch` | Множественное ветвление |
+| `n8n-nodes-base.scheduleTrigger` | Запуск по расписанию |
+| `n8n-nodes-base.errorTrigger` | Обработка ошибок |
+| `@n8n/n8n-nodes-langchain.chainLlm` | AI/LLM интеграция |
+
+### Как AI может работать с воркфлоу
+
+#### 1. Чтение и анализ
+```bash
+# Прочитать воркфлоу
+Read: workflows/n8n/budget-bot.json
+
+# Найти все Code-ноды
+Grep: "n8n-nodes-base.code" in workflows/n8n/
+```
+
+#### 2. Модификация
+- **Изменение параметров нод** — редактировать `parameters` в нужной ноде
+- **Изменение JS-кода** — редактировать `jsCode` в Code-нодах
+- **Изменение SQL-запросов** — редактировать `query` в Postgres-нодах
+- **Изменение сообщений** — редактировать `text` в Telegram-нодах
+
+#### 3. Добавление новых нод
+При добавлении новой ноды необходимо:
+1. Добавить объект ноды в массив `nodes`
+2. Добавить связь в объект `connections`
+3. Сгенерировать уникальный `id` (UUID формат)
+
+#### 4. Важные правила
+
+**НЕ ИЗМЕНЯТЬ:**
+- `id` существующих нод (сломает connections)
+- `credentials.id` (ссылки на секреты в n8n)
+- `webhookId` (идентификаторы вебхуков)
+
+**МОЖНО ИЗМЕНЯТЬ:**
+- `name` — отображаемое имя ноды
+- `parameters` — параметры и настройки
+- `position` — расположение на канвасе
+- `onError`, `retryOnFail`, `maxTries` — обработка ошибок
+
+### Пример: Изменение текста сообщения
+
+Найти ноду по имени:
+```json
+{
+  "name": "Send Welcome",
+  "parameters": {
+    "text": "👋 Добро пожаловать в Budget Bot!..."
+  }
+}
+```
+
+Изменить поле `text` для обновления сообщения.
+
+### Пример: Изменение SQL-запроса
+
+```json
+{
+  "name": "DB Save Expense",
+  "parameters": {
+    "query": "INSERT INTO expenses (chat_id, category, amount) VALUES ($1, $2, $3)...",
+    "options": {
+      "queryReplacement": "={{ [$json.chatId, $json.category, $json.amount] }}"
+    }
+  }
+}
+```
+
+### Пример: Изменение JavaScript-кода
+
+```json
+{
+  "name": "Parse Message",
+  "parameters": {
+    "jsCode": "const message = $input.first().json.message;..."
+  }
+}
+```
+
+### Выражения n8n
+
+В параметрах используются выражения n8n:
+- `{{ $json.field }}` — доступ к полю текущих данных
+- `{{ $('Node Name').first().json.field }}` — данные из конкретной ноды
+- `{{ $input.first().json }}` — входные данные
+- `{{ $env.VAR_NAME }}` — переменные окружения
+
+### Текущие воркфлоу
+
+| Файл | Описание |
+|------|----------|
+| `budget-bot.json` | Telegram-бот для учёта расходов |
+| `Budget Bot Fixed.json` | Исправленная версия Budget Bot |
+
+### Синхронизация с n8n
+
+После изменения JSON-файла:
+1. Откройте n8n: https://ulucky.app.n8n.cloud
+2. Импортируйте файл: **+** → **Import from File**
+3. Проверьте credentials (могут потребоваться пере-привязки)
+4. Активируйте воркфлоу
+
 ## Troubleshooting
 
 ### Common Issues
