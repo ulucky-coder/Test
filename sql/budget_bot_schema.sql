@@ -65,7 +65,7 @@ BEGIN
       THEN ROUND((COALESCE(SUM(e.amount), 0) / u.budget_limit * 100)::NUMERIC, 1)
       ELSE 0
     END as percent_used,
-    COUNT(e.id)::INTEGER as transaction_count
+    COUNT(*)::INTEGER as transaction_count
   FROM users u
   LEFT JOIN expenses e ON e.chat_id = u.chat_id
     AND DATE_TRUNC('month', e.date) = DATE_TRUNC('month', CURRENT_DATE)
@@ -169,7 +169,7 @@ BEGIN
   RETURN QUERY
   SELECT
     COALESCE(SUM(e.amount), 0)::NUMERIC as total_spent,
-    COUNT(e.id)::INTEGER as transaction_count,
+    COUNT(*)::INTEGER as transaction_count,
     COALESCE(AVG(e.amount), 0)::NUMERIC as avg_transaction
   FROM expenses e
   WHERE e.chat_id = p_chat_id
