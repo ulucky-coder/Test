@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.mcp.json
 
 # API keys should never be committed
 *.key
