@@ -1,0 +1,88 @@
+{
+  "name": "HR Bot - 04b Interview Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Сообщение кандидата: {{ $json.user_message }}\n\nИзвестные данные о кандидате:\n{{ JSON.stringify($json.known_data) }}\n\nИстория диалога:\n{{ $json.chat_history_text }}\n\nДоступные вакансии:\n{{ $json.vacancies_text }}",
+        "options": {
+          "systemMessage": "Ты — дружелюбный рекрутер BestHotel. Проводишь первичное собеседование (скрининг). 🏨\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Говори ТОЛЬКО о вакансиях из раздела \"Доступные вакансии\"\n2. Если вакансии НЕТ в списке — НИКОГДА не упоминай её\n3. ЗАПРЕЩЕНО придумывать зарплаты, условия или графики\n4. Используй ТОЛЬКО данные из промпта\n\nТВОЯ ЗАДАЧА:\n1. Собрать данные: имя, фамилию, гражданство, возраст, опыт работы, наличие документов, телефон\n2. Использовать \"крючки\": стабильность, легальность, регулярная оплата\n3. Задавать вопросы ПО ОДНОМУ\n4. НЕ ПЕРЕСПРАШИВАТЬ то, что кандидат уже сказал\n\nПРАВИЛА:\n- Если данные есть в known_data → НЕ спрашивай повторно\n- Если кандидат написал несколько данных сразу → извлеки ВСЁ\n- Отвечай 2-3 предложениями с 2-3 эмодзи\n- Когда ВСЕ обязательные данные собраны → установи interview_complete: true\n\nОБЯЗАТЕЛЬНЫЕ ДАННЫЕ ДЛЯ ЗАВЕРШЕНИЯ:\n- first_name (имя)\n- citizenship (гражданство)\n- age (возраст)\n- experience (опыт работы)\n- documents_status (yes/no/processing)\n- phone (телефон)\n\nОтвечай ТОЛЬКО JSON без markdown:\n{\n  \"message\": \"текст для кандидата\",\n  \"extracted_data\": {\n    \"first_name\": \"Имя или null\",\n    \"last_name\": \"Фамилия или null\",\n    \"citizenship\": \"Гражданство или null\",\n    \"age\": число или null,\n    \"experience\": \"Описание опыта или null\",\n    \"documents_status\": \"yes/no/processing или null\",\n    \"phone\": \"Телефон или null\"\n  },\n  \"interview_complete\": false,\n  \"needs_escalation\": false\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [220, 0],
+      "id": "interview-agent",
+      "name": "Interview Agent"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [220, 200],
+      "id": "deepseek-interview",
+      "name": "DeepSeek Interview",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "g1KQFdKf5EC4OIiO",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// INTERVIEW AGENT: Format Response (v3.0)\n// ============================================================\n\nconst context = $('Execute Workflow Trigger').first().json;\nconst response = $json;\n\nlet parsed = {\n  message: 'Расскажите немного о себе. Как вас зовут? 🤝',\n  extracted_data: {},\n  interview_complete: false,\n  needs_escalation: false\n};\n\ntry {\n  const rawOutput = response.text || response.output || response.content || '';\n  const cleanJson = String(rawOutput)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Interview parse error:', e.message);\n}\n\n// Мержим известные данные с новыми\nconst mergedData = { ...context.known_data };\nif (parsed.extracted_data) {\n  Object.keys(parsed.extracted_data).forEach(key => {\n    const value = parsed.extracted_data[key];\n    if (value && value !== 'unknown' && value !== null && value !== 'null' && value !== '') {\n      mergedData[key] = value;\n    }\n  });\n}\n\n// Проверяем полноту данных для автоматического завершения\nconst requiredFields = ['first_name', 'citizenship', 'age', 'documents_status', 'phone'];\nconst filledFields = requiredFields.filter(f => \n  mergedData[f] && mergedData[f] !== null && mergedData[f] !== 'unknown'\n);\nconst isComplete = filledFields.length >= 5 || parsed.interview_complete;\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  language: context.language,\n  route_category: context.route_category,\n  vacancies: context.vacancies,\n  \n  // Response\n  response_message: parsed.message,\n  final_message: parsed.message,\n  extracted_data: mergedData,\n  interview_complete: isComplete,\n  show_language_buttons: false,\n  needs_escalation: parsed.needs_escalation || false,\n  \n  // Debug info\n  filled_fields: filledFields.length,\n  required_fields: requiredFields.length\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "format-response",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "call-response-sender",
+      "name": "Call Response Sender",
+      "notes": "05_response_sender"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "Interview Agent", "type": "main", "index": 0}]]
+    },
+    "DeepSeek Interview": {
+      "ai_languageModel": [[{"node": "Interview Agent", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Interview Agent": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+    },
+    "Format Response": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Agent"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

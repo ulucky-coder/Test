@@ -1,0 +1,128 @@
+{
+  "name": "HR Bot - 07 Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "id": "error-trigger",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ERROR HANDLER: Parse and Format Error (v3.0)\n// ============================================================\n\nconst error = $json;\nconst execution = error.execution || {};\nconst workflow = error.workflow || {};\n\n// Извлекаем информацию об ошибке\nconst errorMessage = execution.error?.message || 'Unknown error';\nconst errorStack = execution.error?.stack || '';\nconst nodeName = execution.lastNodeExecuted || 'Unknown node';\nconst workflowName = workflow.name || 'Unknown workflow';\nconst workflowId = workflow.id || 'Unknown';\nconst executionId = execution.id || 'Unknown';\nconst timestamp = new Date().toISOString();\n\n// Определяем severity\nlet severity = 'WARNING';\nif (errorMessage.includes('FATAL') || errorMessage.includes('crash')) {\n  severity = 'CRITICAL';\n} else if (errorMessage.includes('timeout') || errorMessage.includes('rate limit')) {\n  severity = 'INFO';\n}\n\n// Форматируем для логирования\nconst logEntry = {\n  timestamp: timestamp,\n  severity: severity,\n  workflow_name: workflowName,\n  workflow_id: workflowId,\n  execution_id: executionId,\n  node_name: nodeName,\n  error_message: errorMessage,\n  error_stack: errorStack.substring(0, 500),\n  raw_data: JSON.stringify(error).substring(0, 1000)\n};\n\n// Форматируем сообщение для Telegram\nconst telegramMessage = `🚨 <b>${severity}: Ошибка в HR Bot</b>\\n\\n` +\n  `📋 Workflow: ${workflowName}\\n` +\n  `🔧 Node: ${nodeName}\\n` +\n  `❌ Error: ${errorMessage.substring(0, 200)}\\n\\n` +\n  `🕐 Time: ${timestamp}\\n` +\n  `🆔 Execution: ${executionId}`;\n\nreturn {\n  ...logEntry,\n  telegram_message: telegramMessage\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "parse-error",
+      "name": "Parse Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_logs (\n  timestamp,\n  severity,\n  workflow_name,\n  workflow_id,\n  execution_id,\n  node_name,\n  error_message,\n  error_stack,\n  raw_data\n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "options": {
+          "queryReplacement": "={{ [$json.timestamp, $json.severity, $json.workflow_name, $json.workflow_id, $json.execution_id, $json.node_name, $json.error_message, $json.error_stack, $json.raw_data] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [440, 0],
+      "id": "save-to-db",
+      "name": "Save Error to DB",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.severity }}",
+              "rightValue": "CRITICAL",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "id": "critical-check"
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "id": "if-critical",
+      "name": "IF Critical Error"
+    },
+    {
+      "parameters": {
+        "chatId": "-1003410305192",
+        "text": "={{ $json.telegram_message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, -100],
+      "id": "notify-critical",
+      "name": "Notify HR - Critical Error",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log non-critical error (just console for now)\nconsole.log('⚠️ Non-critical error logged:', $json.error_message);\nreturn $json;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 100],
+      "id": "log-warning",
+      "name": "Log Warning"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [[{"node": "Parse Error", "type": "main", "index": 0}]]
+    },
+    "Parse Error": {
+      "main": [[{"node": "Save Error to DB", "type": "main", "index": 0}]]
+    },
+    "Save Error to DB": {
+      "main": [[{"node": "IF Critical Error", "type": "main", "index": 0}]]
+    },
+    "IF Critical Error": {
+      "main": [
+        [{"node": "Notify HR - Critical Error", "type": "main", "index": 0}],
+        [{"node": "Log Warning", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Error"}],
+  "triggerCount": 1,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

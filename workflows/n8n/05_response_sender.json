@@ -1,0 +1,209 @@
+{
+  "name": "HR Bot - 05 Response Sender",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "show-buttons-check",
+              "leftValue": "={{ $json.show_language_buttons }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [220, 0],
+      "id": "if-show-buttons",
+      "name": "IF Show Language Buttons"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.token }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $json.chat_id }},\n  \"text\": {{ JSON.stringify($json.final_message) }},\n  \"parse_mode\": \"HTML\",\n  \"reply_markup\": {\n    \"inline_keyboard\": [\n      [\n        {\"text\": \"🇷🇺 Русский\", \"callback_data\": \"lang_ru\"},\n        {\"text\": \"🇰🇬 Кыргызча\", \"callback_data\": \"lang_ky\"}\n      ],\n      [\n        {\"text\": \"🇺🇿 O'zbekcha\", \"callback_data\": \"lang_uz\"},\n        {\"text\": \"🇹🇯 Тоҷикӣ\", \"callback_data\": \"lang_tg\"}\n      ]\n    ]\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, -100],
+      "id": "send-with-buttons",
+      "name": "Send With Language Buttons",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.final_message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [440, 100],
+      "id": "send-response",
+      "name": "Send Response to Candidate",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Подготовка данных для сохранения в историю\nconst input = $('Execute Workflow Trigger').first().json;\n\nreturn {\n  ...input,\n  sent_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "id": "merge-after-send",
+      "name": "Merge After Send"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO n8n_chat_histories (\n  session_id,\n  user_id,\n  user_message,\n  bot_response,\n  extracted_data,\n  created_at\n) VALUES (\n  $1::uuid,\n  $2,\n  $3,\n  $4,\n  $5::jsonb,\n  NOW()\n)",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.session_id,\n  $json.user_id,\n  $json.user_message,\n  $json.final_message,\n  JSON.stringify($json.extracted_data || {})\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [880, 0],
+      "id": "save-chat-history",
+      "name": "Save Chat History",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Execute Workflow Trigger').first().json.interview_complete }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "interview-complete-check"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "id": "if-interview-complete",
+      "name": "IF Interview Complete"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1320, -100],
+      "id": "call-scoring",
+      "name": "Call Scoring Engine",
+      "notes": "06_scoring_engine"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Финальный output - собеседование продолжается\nconst input = $('Execute Workflow Trigger').first().json;\nreturn {\n  status: 'response_sent',\n  interview_complete: false,\n  user_id: input.user_id,\n  session_id: input.session_id\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 100],
+      "id": "interview-continues",
+      "name": "Interview Continues"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "IF Show Language Buttons", "type": "main", "index": 0}]]
+    },
+    "IF Show Language Buttons": {
+      "main": [
+        [{"node": "Send With Language Buttons", "type": "main", "index": 0}],
+        [{"node": "Send Response to Candidate", "type": "main", "index": 0}]
+      ]
+    },
+    "Send With Language Buttons": {
+      "main": [[{"node": "Merge After Send", "type": "main", "index": 0}]]
+    },
+    "Send Response to Candidate": {
+      "main": [[{"node": "Merge After Send", "type": "main", "index": 0}]]
+    },
+    "Merge After Send": {
+      "main": [[{"node": "Save Chat History", "type": "main", "index": 0}]]
+    },
+    "Save Chat History": {
+      "main": [[{"node": "IF Interview Complete", "type": "main", "index": 0}]]
+    },
+    "IF Interview Complete": {
+      "main": [
+        [{"node": "Call Scoring Engine", "type": "main", "index": 0}],
+        [{"node": "Interview Continues", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Response"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

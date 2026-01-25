@@ -1,0 +1,88 @@
+{
+  "name": "HR Bot - 04c FAQ Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Вопрос кандидата: {{ $json.user_message }}\n\nДоступные вакансии:\n{{ $json.vacancies_text }}",
+        "options": {
+          "systemMessage": "Ты — дружелюбный рекрутер BestHotel. Отвечаешь на вопросы о вакансиях. 🏨\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Отвечай ТОЛЬКО на основе данных о вакансиях в промпте\n2. Если информации НЕТ в данных → установи needs_escalation: true\n3. НИКОГДА не придумывай зарплаты, условия или графики\n4. После ответа вежливо верни к собеседованию\n\nЕСЛИ ВАКАНСИИ НЕТ В СПИСКЕ:\n- Скажи: \"Сейчас у нас нет такой вакансии, но я уточню у руководства\"\n- Установи needs_escalation: true\n\nОтвечай ТОЛЬКО JSON без markdown:\n{\n  \"message\": \"текст ответа для кандидата\",\n  \"needs_escalation\": false,\n  \"extracted_data\": {},\n  \"interview_complete\": false\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [220, 0],
+      "id": "faq-agent",
+      "name": "FAQ Agent"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 400,
+          "temperature": 0.5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [220, 200],
+      "id": "deepseek-faq",
+      "name": "DeepSeek FAQ",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "g1KQFdKf5EC4OIiO",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем ответ FAQ Agent\nconst context = $('Execute Workflow Trigger').first().json;\nconst response = $json;\n\nlet parsed = {\n  message: 'Уточню информацию и вернусь к вам. А пока, расскажите о себе! 🤝',\n  needs_escalation: false,\n  extracted_data: {},\n  interview_complete: false\n};\n\ntry {\n  const rawOutput = response.text || response.output || response.content || '';\n  const cleanJson = String(rawOutput)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('FAQ parse error:', e.message);\n}\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  known_data: context.known_data,\n  language: context.language,\n  route_category: context.route_category,\n  \n  // Response\n  response_message: parsed.message,\n  final_message: parsed.message,\n  extracted_data: context.known_data || {},\n  interview_complete: false,\n  show_language_buttons: false,\n  needs_escalation: parsed.needs_escalation || false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "format-response",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "call-response-sender",
+      "name": "Call Response Sender",
+      "notes": "05_response_sender"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "FAQ Agent", "type": "main", "index": 0}]]
+    },
+    "DeepSeek FAQ": {
+      "ai_languageModel": [[{"node": "FAQ Agent", "type": "ai_languageModel", "index": 0}]]
+    },
+    "FAQ Agent": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+    },
+    "Format Response": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Agent"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

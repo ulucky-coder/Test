@@ -1,0 +1,239 @@
+{
+  "name": "HR Bot - 08 Health Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "schedule-trigger",
+      "name": "Run Every 30 Minutes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  'database' as check_name,\n  CASE WHEN COUNT(*) >= 0 THEN 'OK' ELSE 'FAIL' END as status,\n  NOW() as checked_at\nFROM candidate_sessions\nLIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, -100],
+      "id": "check-database",
+      "name": "Check Database Connection",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COUNT(*) as total_sessions,\n  COUNT(*) FILTER (WHERE status = 'in_progress') as active_sessions,\n  COUNT(*) FILTER (WHERE status = 'completed') as completed_sessions,\n  COUNT(*) FILTER (WHERE started_at > NOW() - INTERVAL '24 hours') as sessions_today,\n  COUNT(*) FILTER (WHERE started_at > NOW() - INTERVAL '1 hour') as sessions_last_hour\nFROM candidate_sessions",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 100],
+      "id": "get-session-stats",
+      "name": "Get Session Statistics",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COUNT(*) as total_approved,\n  COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as approved_today\nFROM approved_candidates",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 300],
+      "id": "get-approved-stats",
+      "name": "Get Approved Statistics",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  COUNT(*) as errors_last_hour,\n  MAX(timestamp) as last_error_time\nFROM error_logs\nWHERE timestamp > NOW() - INTERVAL '1 hour'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 500],
+      "id": "get-error-stats",
+      "name": "Get Error Statistics",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// HEALTH CHECK: Compile Report (v3.0)\n// ============================================================\n\nconst dbCheck = $('Check Database Connection').first().json;\nconst sessionStats = $('Get Session Statistics').first().json;\nconst approvedStats = $('Get Approved Statistics').first().json;\nconst errorStats = $('Get Error Statistics').first().json;\n\nconst timestamp = new Date().toISOString();\n\n// Determine overall health\nlet overallStatus = '🟢 HEALTHY';\nlet issues = [];\n\n// Check for issues\nif (!dbCheck || dbCheck.status !== 'OK') {\n  overallStatus = '🔴 CRITICAL';\n  issues.push('Database connection failed');\n}\n\nconst errorsLastHour = parseInt(errorStats?.errors_last_hour) || 0;\nif (errorsLastHour > 10) {\n  overallStatus = '🟡 WARNING';\n  issues.push(`High error rate: ${errorsLastHour} errors/hour`);\n}\n\nif (errorsLastHour > 50) {\n  overallStatus = '🔴 CRITICAL';\n}\n\n// Compile report\nconst report = {\n  timestamp: timestamp,\n  overall_status: overallStatus,\n  issues: issues,\n  metrics: {\n    database: dbCheck?.status || 'UNKNOWN',\n    total_sessions: sessionStats?.total_sessions || 0,\n    active_sessions: sessionStats?.active_sessions || 0,\n    completed_sessions: sessionStats?.completed_sessions || 0,\n    sessions_today: sessionStats?.sessions_today || 0,\n    sessions_last_hour: sessionStats?.sessions_last_hour || 0,\n    total_approved: approvedStats?.total_approved || 0,\n    approved_today: approvedStats?.approved_today || 0,\n    errors_last_hour: errorsLastHour\n  }\n};\n\n// Format Telegram message\nconst telegramMessage = \n  `📊 <b>HR Bot Health Check</b>\\n\\n` +\n  `Status: ${overallStatus}\\n\\n` +\n  `<b>📈 Sessions:</b>\\n` +\n  `• Total: ${report.metrics.total_sessions}\\n` +\n  `• Active: ${report.metrics.active_sessions}\\n` +\n  `• Today: ${report.metrics.sessions_today}\\n` +\n  `• Last hour: ${report.metrics.sessions_last_hour}\\n\\n` +\n  `<b>✅ Approved:</b>\\n` +\n  `• Total: ${report.metrics.total_approved}\\n` +\n  `• Today: ${report.metrics.approved_today}\\n\\n` +\n  `<b>❌ Errors:</b>\\n` +\n  `• Last hour: ${report.metrics.errors_last_hour}\\n\\n` +\n  `🕐 ${timestamp}`;\n\nreturn {\n  ...report,\n  telegram_message: telegramMessage,\n  should_notify: overallStatus !== '🟢 HEALTHY' || (new Date().getHours() === 9 && new Date().getMinutes() < 30)\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 200],
+      "id": "compile-report",
+      "name": "Compile Health Report"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.should_notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "notify-check"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 200],
+      "id": "if-should-notify",
+      "name": "IF Should Notify"
+    },
+    {
+      "parameters": {
+        "chatId": "-1003410305192",
+        "text": "={{ $json.telegram_message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [940, 100],
+      "id": "send-health-report",
+      "name": "Send Health Report",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log health check (no notification needed)\nconsole.log('✅ Health check completed:', $json.overall_status);\nreturn $json;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 300],
+      "id": "log-health",
+      "name": "Log Health Check"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO health_checks (\n  timestamp,\n  overall_status,\n  total_sessions,\n  active_sessions,\n  sessions_today,\n  errors_last_hour,\n  approved_today\n) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "options": {
+          "queryReplacement": "={{ [$json.timestamp, $json.overall_status, $json.metrics.total_sessions, $json.metrics.active_sessions, $json.metrics.sessions_today, $json.metrics.errors_last_hour, $json.metrics.approved_today] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1160, 200],
+      "id": "save-health-check",
+      "name": "Save Health Check",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Run Every 30 Minutes": {
+      "main": [
+        [
+          {"node": "Check Database Connection", "type": "main", "index": 0},
+          {"node": "Get Session Statistics", "type": "main", "index": 0},
+          {"node": "Get Approved Statistics", "type": "main", "index": 0},
+          {"node": "Get Error Statistics", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Check Database Connection": {
+      "main": [[{"node": "Compile Health Report", "type": "main", "index": 0}]]
+    },
+    "Get Session Statistics": {
+      "main": [[{"node": "Compile Health Report", "type": "main", "index": 0}]]
+    },
+    "Get Approved Statistics": {
+      "main": [[{"node": "Compile Health Report", "type": "main", "index": 0}]]
+    },
+    "Get Error Statistics": {
+      "main": [[{"node": "Compile Health Report", "type": "main", "index": 0}]]
+    },
+    "Compile Health Report": {
+      "main": [[{"node": "IF Should Notify", "type": "main", "index": 0}]]
+    },
+    "IF Should Notify": {
+      "main": [
+        [{"node": "Send Health Report", "type": "main", "index": 0}],
+        [{"node": "Log Health Check", "type": "main", "index": 0}]
+      ]
+    },
+    "Send Health Report": {
+      "main": [[{"node": "Save Health Check", "type": "main", "index": 0}]]
+    },
+    "Log Health Check": {
+      "main": [[{"node": "Save Health Check", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Monitoring"}],
+  "triggerCount": 1,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

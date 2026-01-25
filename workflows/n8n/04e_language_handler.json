@@ -1,0 +1,73 @@
+{
+  "name": "HR Bot - 04e Language Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// LANGUAGE HANDLER: Process Language Selection (v3.0 - FIXED)\n// ============================================================\n\nconst context = $json;\nconst text = (context.user_message || '').toLowerCase();\nconst callbackData = context.callback_data || '';\n\n// Объявляем переменные ПРАВИЛЬНО\nlet language = 'ru';\nlet confirmation = '';\n\n// Проверяем callback_data СНАЧАЛА (inline-кнопки), потом текст\nif (callbackData === 'lang_ru' || text.includes('русский') || text.includes('русск')) {\n  language = 'ru';\n  confirmation = 'Отлично! Продолжим на русском. 🇷🇺';\n} else if (callbackData === 'lang_ky' || text.includes('кыргыз') || text.includes('kyrgyz')) {\n  language = 'ky';\n  confirmation = 'Жакшы! Мен сиз менен кыргызча сүйлөшөм. 🇰🇬';\n} else if (callbackData === 'lang_uz' || text.includes('узбек') || text.includes(\"o'zbek\") || text.includes('ozbek')) {\n  language = 'uz';\n  confirmation = \"Yaxshi! Men siz bilan o'zbekcha gaplashaman. 🇺🇿\";\n} else if (callbackData === 'lang_tg' || text.includes('таджик') || text.includes('тоҷик') || text.includes('tojik')) {\n  language = 'tg';\n  confirmation = 'Хуб! Ман бо шумо тоҷикӣ гап мезанам. 🇹🇯';\n} else {\n  // Fallback на русский\n  language = 'ru';\n  confirmation = 'Продолжим на русском. 🇷🇺';\n}\n\n// Формируем сообщение с вопросом об имени\nconst responseMessage = confirmation + '\\n\\n🤝 Расскажите, пожалуйста, как вас зовут?';\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  known_data: context.known_data || {},\n  route_category: context.route_category,\n  \n  // Response\n  response_message: responseMessage,\n  final_message: responseMessage,\n  extracted_data: context.known_data || {},\n  interview_complete: false,\n  show_language_buttons: false,\n  needs_escalation: false,\n  \n  // Updated language\n  language: language,\n  selected_language: language\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "handle-language",
+      "name": "Handle Language Selection"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE candidate_sessions \nSET language = $1\nWHERE id = $2::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.language, $json.session_id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [440, 0],
+      "id": "update-session-language",
+      "name": "Update Session Language",
+      "credentials": {
+        "postgres": {
+          "id": "0AYoJYr8BGzKVyG6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 0],
+      "id": "call-response-sender",
+      "name": "Call Response Sender",
+      "notes": "05_response_sender"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{"node": "Handle Language Selection", "type": "main", "index": 0}]]
+    },
+    "Handle Language Selection": {
+      "main": [[{"node": "Update Session Language", "type": "main", "index": 0}]]
+    },
+    "Update Session Language": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {"executionOrder": "v1"},
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Handler"}],
+  "triggerCount": 0,
+  "meta": {"instanceId": "hr-bot-v2"}
+}

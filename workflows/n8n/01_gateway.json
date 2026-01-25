@@ -1,0 +1,136 @@
+{
+  "name": "HR Bot - 01 Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "webhookId": "hr-bot-gateway",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// GATEWAY: Rate Limiter + Spam Protection (v3.0)\n// ============================================================\n\nconst input = $input.first().json;\nconst isCallback = !!input.callback_query;\nconst message = isCallback ? input.callback_query.message : input.message;\nconst from = isCallback ? input.callback_query.from : input.message?.from;\n\n// Валидация входных данных\nif (!from?.id) {\n  return [{\n    blocked: true,\n    reason: 'no_user_id',\n    message: '⚠️ Ошибка идентификации. Попробуйте позже.',\n    chat_id: message?.chat?.id || 0\n  }];\n}\n\nconst userId = from.id;\nconst chatId = message?.chat?.id || from.id;\nconst text = isCallback ? '' : (input.message?.text || '');\nconst callbackData = isCallback ? input.callback_query.data : null;\n\nconst now = Date.now();\nconst windowMs = 60000; // 1 минута\nconst maxRequests = 15; // макс запросов в минуту\nconst blockDurationMs = 120000; // 2 минуты блокировки\n\n// Получаем глобальное хранилище\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.rateLimits) {\n  staticData.rateLimits = {};\n}\n\nconst limits = staticData.rateLimits;\n\n// Очистка старых записей (каждые 5 минут)\nif (!staticData.lastCleanup || now - staticData.lastCleanup > 300000) {\n  Object.keys(limits).forEach(uid => {\n    if (now > (limits[uid].resetTime || 0) + 300000) {\n      delete limits[uid];\n    }\n  });\n  staticData.lastCleanup = now;\n}\n\n// Инициализация лимитов пользователя\nif (!limits[userId]) {\n  limits[userId] = {\n    count: 0,\n    resetTime: now + windowMs,\n    blocked_until: 0\n  };\n}\n\nconst userLimits = limits[userId];\n\n// Проверка блокировки\nif (now < userLimits.blocked_until) {\n  const waitSec = Math.ceil((userLimits.blocked_until - now) / 1000);\n  return [{\n    blocked: true,\n    reason: 'rate_limit',\n    message: `⏳ Подождите ${waitSec} сек. перед следующим сообщением.`,\n    chat_id: chatId,\n    user_id: userId\n  }];\n}\n\n// Сброс счетчика если окно истекло\nif (now > userLimits.resetTime) {\n  userLimits.count = 0;\n  userLimits.resetTime = now + windowMs;\n}\n\nuserLimits.count++;\n\n// Блокировка при превышении лимита\nif (userLimits.count > maxRequests) {\n  userLimits.blocked_until = now + blockDurationMs;\n  return [{\n    blocked: true,\n    reason: 'spam',\n    message: '🚫 Слишком много сообщений. Подождите 2 минуты.',\n    chat_id: chatId,\n    user_id: userId\n  }];\n}\n\n// Проверка на спам-контент\nconst spamPatterns = [\n  /http[s]?:\\/\\//i,       // ссылки\n  /t\\.me\\//i,             // телеграм ссылки\n  /@\\w{5,}/,              // длинные юзернеймы\n  /[А-Яа-яA-Za-z]{50,}/   // очень длинные слова\n];\n\nconst isSpamContent = spamPatterns.some(p => p.test(text));\nif (isSpamContent && !isCallback) {\n  return [{\n    blocked: true,\n    reason: 'spam_content',\n    message: '⚠️ Сообщение заблокировано. Пожалуйста, отправьте текст без ссылок.',\n    chat_id: chatId,\n    user_id: userId\n  }];\n}\n\n// Всё OK - пропускаем дальше\nreturn [{\n  blocked: false,\n  chat_id: chatId,\n  user_id: userId,\n  text: text,\n  first_name: from?.first_name || '',\n  username: from?.username || '',\n  is_callback: isCallback,\n  callback_data: callbackData,\n  timestamp: now,\n  message_id: message?.message_id || null\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "rate-limiter",
+      "name": "Rate Limiter & Spam Check"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.blocked }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "blocked-check"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "if-blocked",
+      "name": "IF Blocked"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, -100],
+      "id": "send-block-message",
+      "name": "Send Block Message",
+      "credentials": {
+        "telegramApi": {
+          "id": "cS1RormMvPe41m7M",
+          "name": "Zest"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [660, 100],
+      "id": "call-session-manager",
+      "name": "Call Session Manager",
+      "notes": "Вызывает workflow 02_session_manager"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Логирование для отладки\nconst data = $json;\nconsole.log('📥 GATEWAY INPUT:', {\n  user_id: data.user_id,\n  text: data.text?.substring(0, 50),\n  is_callback: data.is_callback,\n  callback_data: data.callback_data,\n  blocked: data.blocked\n});\nreturn data;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 100],
+      "id": "log-output",
+      "name": "Log Gateway Output"
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{"node": "Rate Limiter & Spam Check", "type": "main", "index": 0}]]
+    },
+    "Rate Limiter & Spam Check": {
+      "main": [[{"node": "IF Blocked", "type": "main", "index": 0}]]
+    },
+    "IF Blocked": {
+      "main": [
+        [{"node": "Send Block Message", "type": "main", "index": 0}],
+        [{"node": "Call Session Manager", "type": "main", "index": 0}]
+      ]
+    },
+    "Call Session Manager": {
+      "main": [[{"node": "Log Gateway Output", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [{"name": "HR Bot"}, {"name": "Gateway"}],
+  "triggerCount": 1,
+  "meta": {
+    "instanceId": "hr-bot-v2"
+  }
+}
