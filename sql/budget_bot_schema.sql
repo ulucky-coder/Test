@@ -36,6 +36,15 @@ CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
 -- 2. ФУНКЦИИ
 -- ============================================
 
+-- Удаляем старые функции (если существуют с другой сигнатурой)
+DROP FUNCTION IF EXISTS get_monthly_stats(BIGINT);
+DROP FUNCTION IF EXISTS get_category_stats(BIGINT);
+DROP FUNCTION IF EXISTS get_yesterday_expenses(BIGINT);
+DROP FUNCTION IF EXISTS get_expenses_by_period(BIGINT, DATE, DATE);
+DROP FUNCTION IF EXISTS get_daily_stats(BIGINT, DATE);
+DROP FUNCTION IF EXISTS get_top_categories(BIGINT, INTEGER);
+DROP FUNCTION IF EXISTS get_month_comparison(BIGINT);
+
 -- Функция: Месячная статистика пользователя
 CREATE OR REPLACE FUNCTION get_monthly_stats(p_chat_id BIGINT)
 RETURNS TABLE (
