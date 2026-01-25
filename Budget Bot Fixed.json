@@ -1,0 +1,1814 @@
+{
+  "name": "Budget Bot Fixed",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "426ad853-2b27-4c85-b360-a72e8e1984e3",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -3264,
+        2080
+      ],
+      "webhookId": "budget-bot-webhook",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression"
+            }
+          ]
+        }
+      },
+      "id": "4b35ab15-3a21-4584-bcb1-94c641e8190c",
+      "name": "Daily Report Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -3264,
+        2864
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "59692b7e-148b-4a5a-9f54-b88c9434872a",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -3488,
+        3088
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "callback-check",
+              "leftValue": "={{ $json.callback_query }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b13976e9-b4d3-4294-bd70-f030c3b58e71",
+      "name": "Is Callback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3040,
+        2080
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// [FIX #11] Дедупликация + санитизация входных данных\nconst message = $input.first().json.message;\n\nif (!message) {\n  return [{ json: { error: true, errorMessage: 'No message found' } }];\n}\n\nconst chatId = message.chat.id;\nconst text = (message.text || '').trim();\n\n// [FIX] Санитизация username - убираем опасные символы\nlet username = message.from.username || message.from.first_name || 'User';\nusername = username.replace(/[<>\"'`;\\\\]/g, '').substring(0, 64);\n\n// Определяем тип сообщения\nlet messageType = 'text';\nlet command = null;\n\nif (text.startsWith('/')) {\n  messageType = 'command';\n  command = text.split(' ')[0].toLowerCase().replace(/[^a-z\\/]/g, '');\n}\n\n// [FIX #11] ID для дедупликации\nconst updateId = $input.first().json.update_id;\n\nreturn [{\n  json: {\n    chatId,\n    text,\n    username,\n    messageType,\n    command,\n    updateId,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "ccbd0db3-11ab-4fbc-bc1e-dbf3da3b05c5",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2816,
+        1696
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Извлекаем данные из callback_query с санитизацией\nconst callback = $input.first().json.callback_query;\n\nif (!callback) {\n  return [{ json: { error: true, errorMessage: 'No callback found' } }];\n}\n\nconst chatId = callback.message.chat.id;\n// [FIX] Валидация callbackData - только разрешённые значения\nconst allowedCallbacks = ['ai_advice'];\nconst callbackData = allowedCallbacks.includes(callback.data) ? callback.data : 'unknown';\nconst messageId = callback.message.message_id;\n\nlet username = callback.from.username || callback.from.first_name || 'User';\nusername = username.replace(/[<>\"'`;\\\\]/g, '').substring(0, 64);\n\nreturn [{\n  json: {\n    chatId,\n    callbackData,\n    messageId,\n    username,\n    messageType: 'callback',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "1f11c9d4-a42b-481f-9e9f-9a628c715333",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2816,
+        2464
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "options": {}
+      },
+      "id": "09cb581c-1022-4637-a0f8-2ab5521f5988",
+      "name": "Redis Get State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -2592,
+        1696
+      ],
+      "credentials": {
+        "redis": {
+          "id": "7jKMEG5lYlMNBtCm",
+          "name": "Redis account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// [FIX #7, #10] Определяем состояние с fallback + убраны хрупкие ссылки\nconst prevNode = $input.first().json;\nconst parseMessage = $('Parse Message').first().json;\n\nconst chatId = parseMessage.chatId;\nconst text = parseMessage.text;\nconst command = parseMessage.command;\nconst username = parseMessage.username;\n\n// [FIX #7] Fallback если Redis недоступен\nlet state = 'base';\ntry {\n  state = prevNode.value || 'base';\n} catch (e) {\n  state = 'base';\n}\n\n// Определяем действие\nlet action = 'unknown';\n\nif (command === '/start') {\n  action = 'start';\n} else if (command === '/status') {\n  action = 'status';\n} else if (command === '/report') {\n  action = 'report';\n} else if (command === '/help') {\n  action = 'help';\n} else if (state === 'set_limit') {\n  action = 'save_budget';\n} else if (state === 'base' && text.length > 0) {\n  action = 'parse_expense';\n}\n\nreturn [{\n  json: {\n    chatId,\n    text,\n    command,\n    username,\n    state,\n    action,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "8d7060b6-4c09-466a-8fa7-d051effc38cc",
+      "name": "Determine Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        1696
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "start",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "start"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "save_budget",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "save_budget"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "report",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "report"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "parse_expense",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "parse_expense"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "0d6e91c4-54f5-4bba-b474-221edd8b32b4",
+      "name": "Action Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -2144,
+        1616
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "value": "set_limit",
+        "expire": true,
+        "ttl": 2592000
+      },
+      "id": "27717a1f-9b19-4c2e-b823-324d04c892dd",
+      "name": "Redis Set Limit State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -1856,
+        768
+      ],
+      "credentials": {
+        "redis": {
+          "id": "7jKMEG5lYlMNBtCm",
+          "name": "Redis account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (chat_id, username) \nVALUES ($1, $2)\nON CONFLICT (chat_id) DO UPDATE SET \n  username = EXCLUDED.username,\n  updated_at = CURRENT_TIMESTAMP\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.chatId, $json.username] }}"
+        }
+      },
+      "id": "1ddb681f-b44d-48e5-9d18-0607cfbc54e4",
+      "name": "DB Upsert User",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        768
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Determine Action').first().json.chatId }}",
+        "text": "👋 Добро пожаловать в Budget Bot!\n\n💰 Я помогу вам отслеживать расходы и контролировать бюджет.\n\n📝 Пожалуйста, введите ваш месячный лимит расходов (только число):\n\nНапример: 50000",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "ac69629c-36e0-4e5a-b52e-3778eef176b1",
+      "name": "Send Welcome",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1264,
+        752
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "webhookId": "d56dfaf1-5029-4ea5-a885-ca11a20f8385",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// [FIX #12] Улучшенная валидация бюджета\nconst text = $json.text;\nconst chatId = $json.chatId;\n\n// Убираем пробелы и конвертируем запятые\nconst cleanText = text.replace(/\\s/g, '').replace(',', '.');\nconst budgetLimit = parseFloat(cleanText);\n\n// [FIX #12] Расширенная валидация\nif (isNaN(budgetLimit)) {\n  return [{\n    json: {\n      chatId,\n      valid: false,\n      error: 'Пожалуйста, введите число. Например: 50000'\n    }\n  }];\n}\n\nif (budgetLimit <= 0) {\n  return [{\n    json: {\n      chatId,\n      valid: false,\n      error: 'Бюджет должен быть больше 0'\n    }\n  }];\n}\n\nif (budgetLimit > 100000000) {\n  return [{\n    json: {\n      chatId,\n      valid: false,\n      error: 'Слишком большое значение. Максимум: 100,000,000 ₽'\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    chatId,\n    valid: true,\n    budgetLimit: Math.round(budgetLimit * 100) / 100\n  }\n}];"
+      },
+      "id": "2d1021eb-5e6a-40a0-b217-fd27a0af672b",
+      "name": "Validate Budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "valid-check",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "be4e58e5-4542-4865-9d91-0b3aaa6a41ff",
+      "name": "Is Budget Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE users \nSET budget_limit = $1,\n    updated_at = CURRENT_TIMESTAMP\nWHERE chat_id = $2\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.budgetLimit, $json.chatId] }}"
+        }
+      },
+      "id": "32ec2323-9ae7-4358-b7df-78b22c3f81e5",
+      "name": "DB Save Budget",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1280,
+        960
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "value": "base",
+        "expire": true,
+        "ttl": 2592000
+      },
+      "id": "59869124-92d0-4a21-8739-ebf43d7b1da2",
+      "name": "Redis Set Base State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -992,
+        960
+      ],
+      "credentials": {
+        "redis": {
+          "id": "7jKMEG5lYlMNBtCm",
+          "name": "Redis account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Validate Budget').first().json.chatId }}",
+        "text": "=✅ Отлично! Ваш месячный бюджет установлен: *{{ $('Validate Budget').first().json.budgetLimit.toLocaleString('ru-RU') }} ₽*\n\n📱 Теперь вы можете:\n• Записывать траты в формате: `Категория Сумма`\n  Например: `Продукты 1500` или `Кафе 800`\n\n• Использовать команды:\n  /status - текущий статус расходов\n  /report - подробный отчёт\n  /help - помощь\n\n💡 Просто отправьте мне трату!",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "df395da5-3f94-483d-82f3-33a451ec0825",
+      "name": "Send Budget Saved",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -768,
+        960
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "97532146-1351-4405-8b49-764356d3bff8",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=❌ {{ $json.error }}\n\nПопробуйте ещё раз:",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "5e35186f-a38e-478a-96c6-83daa159f08e",
+      "name": "Send Budget Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1280,
+        1152
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "f9def015-febb-4c40-ab70-91a60531b74e",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseFormat": "json_object",
+          "temperature": 0,
+          "timeout": 10000
+        }
+      },
+      "id": "3123b661-cd7a-4fb7-878b-24d9a529d66e",
+      "name": "AI Parse Expense",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -1856,
+        1520
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "HAP7qslMw0ed6kmQ",
+          "name": "n8n free OpenAI API credits"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ты парсер расходов. Извлеки категорию и сумму из текста пользователя.\n\nТекст: \"{{ $json.text }}\"\n\nПравила:\n1. Категория - первое слово (существительное)\n2. Сумма - число в конце\n3. Если формат некорректный, верни error: true\n4. Нормализуй категорию (первая буква заглавная)\n\nОтветь ТОЛЬКО в формате JSON:\n{\n  \"category\": \"string или null\",\n  \"amount\": number или null,\n  \"error\": boolean,\n  \"error_message\": \"string или null\"\n}\n\nПримеры:\n- \"Продукты 1500\" → {\"category\": \"Продукты\", \"amount\": 1500, \"error\": false, \"error_message\": null}\n- \"кафе 800\" → {\"category\": \"Кафе\", \"amount\": 800, \"error\": false, \"error_message\": null}\n- \"привет\" → {\"error\": true, \"error_message\": \"Неверный формат. Используйте: Категория Сумма\"}\n- \"Транспорт\" → {\"error\": true, \"error_message\": \"Укажите сумму\"}"
+      },
+      "id": "0216aa83-817a-4bad-8906-fcb3836a1416",
+      "name": "AI Expense Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -1920,
+        1296
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// [FIX #5, #11] Улучшенный парсер с fallback на regex + обработка ошибок AI\nconst aiInput = $input.first()?.json;\nconst aiResponse = aiInput?.text || '';\nconst chatId = $('Determine Action').first().json.chatId;\nconst originalText = $('Determine Action').first().json.text;\n\nlet parsed = null;\n\n// [FIX #11] Проверка что AI вообще ответил\nif (!aiResponse) {\n  console.log('AI did not respond, using regex fallback');\n} else {\n  // Попытка 1: Парсим JSON от AI\n  try {\n    let cleanResponse = aiResponse;\n    if (cleanResponse.includes('```json')) {\n      cleanResponse = cleanResponse.replace(/```json\\n?/g, '').replace(/```\\n?/g, '');\n    }\n    if (cleanResponse.includes('```')) {\n      cleanResponse = cleanResponse.replace(/```\\n?/g, '');\n    }\n    parsed = JSON.parse(cleanResponse.trim());\n  } catch (e) {\n    console.log('AI parse failed, trying regex fallback:', e.message);\n  }\n}\n\n// [FIX #5, #10] Regex fallback если AI не справился\nif (!parsed || (!parsed.category?.trim() && !parsed.error)) {\n  const regexMatch = originalText.match(/^([а-яА-ЯёЁa-zA-Z]+)\\s+(\\d+(?:[.,]\\d+)?)$/u);\n  \n  if (regexMatch) {\n    const category = regexMatch[1].charAt(0).toUpperCase() + regexMatch[1].slice(1).toLowerCase();\n    const amount = parseFloat(regexMatch[2].replace(',', '.'));\n    \n    if (amount > 0 && amount < 10000000) {\n      parsed = {\n        category: category.substring(0, 50),\n        amount: amount,\n        error: false,\n        error_message: null\n      };\n    }\n  }\n}\n\n// Финальная проверка\nif (!parsed) {\n  parsed = {\n    error: true,\n    error_message: 'Не удалось распознать трату. Формат: Категория Сумма (например: Продукты 1500)'\n  };\n}\n\n// [FIX] Валидация amount\nif (parsed.amount && (parsed.amount <= 0 || parsed.amount > 10000000)) {\n  parsed = {\n    error: true,\n    error_message: 'Сумма должна быть от 1 до 10,000,000 ₽'\n  };\n}\n\nreturn [{\n  json: {\n    chatId,\n    ...parsed\n  }\n}];"
+      },
+      "id": "72ae19cb-c448-4bf0-bd73-5a277700c526",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "error-check",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "89f78e16-6521-4ea0-bc05-cd2553c52dc6",
+      "name": "Is Expense Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO expenses (chat_id, category, amount, date)\nVALUES ($1, $2, $3, CURRENT_DATE)\nRETURNING *;",
+        "options": {
+          "queryReplacement": "={{ [$json.chatId, $json.category, $json.amount] }}"
+        }
+      },
+      "id": "1d685880-0fc1-4b08-9cc9-0697bec879ee",
+      "name": "DB Save Expense",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -992,
+        1248
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_monthly_stats($1::BIGINT);\n",
+        "options": {
+          "queryReplacement": "={{ [$json.chat_id] }}"
+        }
+      },
+      "id": "2945ec4c-ea31-4624-8fe4-47fde52a65ba",
+      "name": "DB Get Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -768,
+        1248
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем сообщение о сохранённой трате\nconst expense = $('Parse AI Response').first().json;\nconst stats = $input.first().json;\n\nconst remaining = parseFloat(stats.remaining || 0);\nconst percentUsed = parseFloat(stats.percent_used || 0);\n\nlet statusEmoji = '✅';\nlet warningText = '';\n\nif (percentUsed >= 100) {\n  statusEmoji = '🚨';\n  warningText = '\\n\\n⚠️ *Внимание! Бюджет превышен!*';\n} else if (percentUsed >= 80) {\n  statusEmoji = '⚠️';\n  warningText = '\\n\\n⚠️ Вы израсходовали более 80% бюджета!';\n} else if (percentUsed >= 50) {\n  statusEmoji = '📊';\n}\n\nconst message = `${statusEmoji} Записано: *${expense.category}* - ${expense.amount.toLocaleString('ru-RU')} ₽\n\n📊 Статус бюджета:\n• Потрачено: ${parseFloat(stats.total_spent || 0).toLocaleString('ru-RU')} ₽\n• Осталось: ${remaining.toLocaleString('ru-RU')} ₽\n• Использовано: ${percentUsed}%${warningText}`;\n\nreturn [{\n  json: {\n    chatId: expense.chatId,\n    message\n  }\n}];"
+      },
+      "id": "ffa8060a-877c-4ef6-99fe-a003b4cd71c1",
+      "name": "Format Expense Saved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        1248
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "0554f4d0-7b03-480e-986b-586279c257a8",
+      "name": "Send Expense Saved",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -320,
+        1248
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "aee7552e-bf30-4ca0-aec3-3bd83ee003f6",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=❌ {{ $json.error_message || 'Не удалось распознать трату' }}\n\n💡 Формат: `Категория Сумма`\nНапример: `Продукты 1500`",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "384b5228-cfb8-410a-9973-6a3be5ae939f",
+      "name": "Send Expense Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -992,
+        1552
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "e1d988fe-85fb-4218-98ee-06d340c34b65",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_monthly_stats($1);",
+        "options": {
+          "queryReplacement": "={{ [$json.chatId] }}"
+        }
+      },
+      "id": "5d330886-dfde-48f5-8974-24c820e46be1",
+      "name": "DB Get Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1856,
+        1696
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем статус\nconst stats = $input.first().json;\nconst chatId = $('Determine Action').first().json.chatId;\n\nconst totalSpent = parseFloat(stats.total_spent || 0);\nconst budgetLimit = parseFloat(stats.budget_limit || 0);\nconst remaining = parseFloat(stats.remaining || 0);\nconst percentUsed = parseFloat(stats.percent_used || 0);\nconst txCount = parseInt(stats.transaction_count || 0);\n\nlet statusEmoji = '✅';\nlet progressBar = '';\n\n// Создаём прогресс-бар\nconst filled = Math.min(Math.round(percentUsed / 10), 10);\nconst empty = 10 - filled;\nprogressBar = '█'.repeat(filled) + '░'.repeat(empty);\n\nif (percentUsed >= 100) {\n  statusEmoji = '🚨 БЮДЖЕТ ПРЕВЫШЕН!';\n} else if (percentUsed >= 80) {\n  statusEmoji = '⚠️ Внимание!';\n} else if (percentUsed >= 50) {\n  statusEmoji = '📊 Всё под контролем';\n} else {\n  statusEmoji = '✅ Отлично!';\n}\n\nconst message = `${statusEmoji}\n\n💰 *Статус бюджета на ${new Date().toLocaleDateString('ru-RU')}*\n\n${progressBar} ${percentUsed}%\n\n📈 Лимит: ${budgetLimit.toLocaleString('ru-RU')} ₽\n💸 Потрачено: ${totalSpent.toLocaleString('ru-RU')} ₽\n💵 Осталось: ${remaining.toLocaleString('ru-RU')} ₽\n📝 Транзакций: ${txCount}\n\n💡 /report - подробный отчёт`;\n\nreturn [{\n  json: { chatId, message }\n}];"
+      },
+      "id": "a8db8f48-c70c-4db4-8ef7-71b4a0515b18",
+      "name": "Format Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        1696
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "a29f408f-d9a5-4475-838a-2962a49dd426",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1280,
+        1696
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "acc07a73-4105-4d31-9532-16978f770cad",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_monthly_stats($1);",
+        "options": {
+          "queryReplacement": "={{ [$json.chatId] }}"
+        }
+      },
+      "id": "b222f85d-9cfb-4c8f-a67b-c929bcec4463",
+      "name": "DB Get Report Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1856,
+        1888
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_category_stats($1);",
+        "options": {
+          "queryReplacement": "={{ [$('Determine Action').first().json.chatId] }}"
+        }
+      },
+      "id": "be8ff0d3-5404-4245-853b-cf71d53820d2",
+      "name": "DB Get Categories",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        1888
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем полный отчёт\nconst stats = $('DB Get Report Stats').first().json;\nconst categories = $input.all().map(i => i.json);\nconst chatId = $('Determine Action').first().json.chatId;\n\nconst totalSpent = parseFloat(stats.total_spent || 0);\nconst budgetLimit = parseFloat(stats.budget_limit || 0);\nconst remaining = parseFloat(stats.remaining || 0);\nconst percentUsed = parseFloat(stats.percent_used || 0);\n\n// Форматируем категории\nlet categoriesText = '';\nif (categories && categories.length > 0 && categories[0].category) {\n  categoriesText = categories\n    .map((c, i) => {\n      const emoji = ['🥇', '🥈', '🥉', '📍', '📍'][i] || '📍';\n      return `${emoji} ${c.category}: ${parseFloat(c.total_amount).toLocaleString('ru-RU')} ₽ (${c.percentage}%)`;\n    })\n    .join('\\n');\n} else {\n  categoriesText = '_Нет расходов за этот месяц_';\n}\n\n// Прогресс-бар\nconst filled = Math.min(Math.round(percentUsed / 10), 10);\nconst empty = 10 - filled;\nconst progressBar = '█'.repeat(filled) + '░'.repeat(empty);\n\nconst monthName = new Date().toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });\n\nconst message = `📊 *ОТЧЁТ ЗА ${monthName.toUpperCase()}*\n\n${progressBar} ${percentUsed}%\n\n💰 *Общая статистика:*\n• Бюджет: ${budgetLimit.toLocaleString('ru-RU')} ₽\n• Потрачено: ${totalSpent.toLocaleString('ru-RU')} ₽\n• Осталось: ${remaining.toLocaleString('ru-RU')} ₽\n\n📁 *Расходы по категориям:*\n${categoriesText}\n\n💡 Нажмите кнопку ниже для AI-анализа ваших трат`;\n\nreturn [{\n  json: { chatId, message, categories, stats }\n}];"
+      },
+      "id": "b6222ced-155d-4477-9273-31b5715ed9be",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        1888
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "🤖 Совет от ИИ",
+                    "additionalFields": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "5c27b3ab-39ea-4087-813e-7ace555ca210",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -992,
+        1888
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "7abd2ed2-0ece-448b-a547-6db2efcd3256",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "advice-check",
+              "leftValue": "={{ $json.callbackData }}",
+              "rightValue": "ai_advice",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9a6473b9-5f4e-4832-af2c-afdf5b0139ea",
+      "name": "Is AI Advice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        2464
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_monthly_stats($1);",
+        "options": {
+          "queryReplacement": "={{ [$json.chatId] }}"
+        }
+      },
+      "id": "41ed4587-98c9-4618-bc31-35e9f725f9e1",
+      "name": "DB Get Advice Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2144,
+        2464
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_category_stats($1);",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Callback').first().json.chatId] }}"
+        }
+      },
+      "id": "2da03da9-9e8c-472f-abfd-7ec666c21285",
+      "name": "DB Get Advice Categories",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1856,
+        2464
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Подготавливаем данные для AI\nconst stats = $('DB Get Advice Stats').first().json;\nconst categories = $input.all().map(i => i.json).filter(c => c.category);\nconst chatId = $('Parse Callback').first().json.chatId;\n\nconst dataForAI = {\n  chatId,\n  totalSpent: parseFloat(stats.total_spent || 0),\n  budgetLimit: parseFloat(stats.budget_limit || 0),\n  remaining: parseFloat(stats.remaining || 0),\n  percentUsed: parseFloat(stats.percent_used || 0),\n  categories: categories.map(c => ({\n    name: c.category,\n    amount: parseFloat(c.total_amount),\n    percentage: parseFloat(c.percentage),\n    transactions: c.transaction_count\n  }))\n};\n\nreturn [{ json: dataForAI }];"
+      },
+      "id": "45295c2a-4395-42f3-81b9-1e257550328a",
+      "name": "Prepare AI Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        2464
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 1000,
+          "temperature": 0.7,
+          "timeout": 15000
+        }
+      },
+      "id": "08bb54b6-7d98-4cc4-8df7-7402b648f4ed",
+      "name": "AI Financial Advisor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -1264,
+        2688
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "HAP7qslMw0ed6kmQ",
+          "name": "n8n free OpenAI API credits"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Ты персональный финансовый консультант. Проанализируй расходы пользователя и дай конкретные рекомендации.\n\nДанные пользователя:\n- Месячный бюджет: {{ $json.budgetLimit }} ₽\n- Потрачено: {{ $json.totalSpent }} ₽ ({{ $json.percentUsed }}%)\n- Осталось: {{ $json.remaining }} ₽\n\nРасходы по категориям:\n{{ $json.categories.length > 0 ? $json.categories.map(c => '- ' + c.name + ': ' + c.amount + ' ₽ (' + c.percentage + '% от расходов, ' + c.transactions + ' транзакций)').join('\\n') : 'Нет данных о расходах' }}\n\nПравила:\n1. Будь конкретным и практичным\n2. Выдели проблемные категории (если есть)\n3. Дай 3-5 actionable советов\n4. Используй эмоджи для читаемости\n5. Пиши на русском языке\n6. Если бюджет превышен - предложи план экономии\n7. Если всё хорошо - похвали и дай советы по оптимизации\n\nФормат ответа:\n📊 Анализ:\n[краткий анализ ситуации]\n\n💡 Рекомендации:\n1. ...\n2. ...\n3. ...\n\n🎯 Главный совет:\n[один ключевой совет]"
+      },
+      "id": "bea114c4-d074-402a-8ec0-25329ff27264",
+      "name": "AI Advice Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -1344,
+        2464
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Callback').first().json.chatId }}",
+        "text": "=🤖 *AI-анализ ваших расходов*\n\n{{ $json.text || 'К сожалению, не удалось получить рекомендации. Попробуйте позже.' }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "d9b89549-3ebf-4c3c-bdcc-d326a4492176",
+      "name": "Send AI Advice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -992,
+        2464
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "c08d6770-23f1-4c45-90dd-66af77a75fec",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "📚 *Помощь по Budget Bot*\n\n*Основные команды:*\n/start - начать работу / сбросить бюджет\n/status - текущий статус расходов\n/report - подробный отчёт с AI-анализом\n/help - эта справка\n\n*Как записать трату:*\nПросто отправьте сообщение в формате:\n`Категория Сумма`\n\nПримеры:\n• `Продукты 1500`\n• `Кафе 800`\n• `Транспорт 300`\n• `Развлечения 2000`\n\n*Популярные категории:*\n🍕 Продукты, Кафе, Рестораны\n🚗 Транспорт, Такси, Бензин\n🏠 ЖКХ, Аренда, Ремонт\n👕 Одежда, Обувь\n💊 Здоровье, Аптека\n🎮 Развлечения, Подписки\n\n💡 *Совет:* Бот ежедневно отправляет отчёт о вчерашних тратах в 9:00",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "1d88a4f0-1f02-4771-9569-f7c41954353d",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1856,
+        2080
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "b22eef0c-32d9-4dfa-82e6-6b26b6698aa2",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT u.chat_id, u.username\nFROM users u\nWHERE EXISTS (\n  SELECT 1 FROM expenses e \n  WHERE e.chat_id = u.chat_id \n  AND e.date = CURRENT_DATE - INTERVAL '1 day'\n);",
+        "options": {}
+      },
+      "id": "12050d72-0d73-4643-b167-47620a4229de",
+      "name": "DB Get Users for Daily Report",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -3040,
+        2864
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "fb217597-f530-4949-ac26-225f28c242cc",
+      "name": "Loop Users",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2816,
+        2864
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_yesterday_expenses($1);",
+        "options": {
+          "queryReplacement": "={{ [$json.chat_id] }}"
+        }
+      },
+      "id": "c669b7c9-679a-414c-b3b1-71da102c9516",
+      "name": "DB Get Yesterday Expenses",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2592,
+        2800
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "Fj0Z6zFIksQ5lbfl",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматируем ежедневный отчёт\nconst expenses = $input.all().map(i => i.json).filter(e => e.category);\nconst chatId = $('Loop Users').first().json.chat_id;\n\nif (!expenses || expenses.length === 0) {\n  return [];\n}\n\nconst total = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);\n\nconst expensesList = expenses\n  .map(e => `• ${e.category}: ${parseFloat(e.amount).toLocaleString('ru-RU')} ₽`)\n  .join('\\n');\n\nconst yesterday = new Date(Date.now() - 86400000).toLocaleDateString('ru-RU');\n\nconst message = `📅 *Отчёт за вчера (${yesterday})*\n\n${expensesList}\n\n💰 *Итого: ${total.toLocaleString('ru-RU')} ₽*\n\n💡 /status - текущий статус бюджета`;\n\nreturn [{\n  json: { chatId, message }\n}];"
+      },
+      "id": "50255053-94e8-42ac-ae01-0a099fff876d",
+      "name": "Format Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        2800
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "0255529c-07d1-4043-a5a3-43b56f402c9c",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2144,
+        2800
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "webhookId": "e516afc0-5f8b-4972-9b55-97ca00a3a4b0",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": 500,
+        "unit": "milliseconds"
+      },
+      "id": "0327d852-8a43-4287-a7fc-68099b6ddd59",
+      "name": "Wait (Rate Limit)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -1920,
+        2864
+      ],
+      "webhookId": "e005af27-a948-4af5-8d56-ce9da21c058e"
+    },
+    {
+      "parameters": {},
+      "id": "2b1911d1-75d6-464f-b830-bda602297ede",
+      "name": "No Operation",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -1856,
+        2272
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $json.callback_query.id }}",
+        "additionalFields": {}
+      },
+      "id": "67970d8f-6860-457f-9a37-030f168f7637",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2592,
+        2464
+      ],
+      "webhookId": "9c2b6a99-4a20-4a76-b58e-a1ea0dc71baf",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// [FIX #4] Error Trigger Logging\nconst error = $input.first().json;\n\nconst errorLog = {\n  timestamp: new Date().toISOString(),\n  workflow: $workflow.name,\n  workflowId: $workflow.id,\n  executionId: $execution.id,\n  errorMessage: error.message || 'Unknown error',\n  errorStack: error.stack || '',\n  nodeName: error.node?.name || 'Unknown',\n  input: JSON.stringify(error.input || {}).substring(0, 500)\n};\n\nconsole.error('Budget Bot Error:', JSON.stringify(errorLog));\n\nreturn [{ json: errorLog }];"
+      },
+      "id": "9983cb08-18ff-4a8c-86bc-0c5dea7c2ee4",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3264,
+        3088
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.ADMIN_CHAT_ID }}",
+        "text": "=🚨 *Budget Bot Error*\n\n⏰ {{ $json.timestamp }}\n📍 Node: {{ $json.nodeName }}\n❌ Error: {{ $json.errorMessage }}\n\n🔗 Execution: {{ $json.executionId }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "98db1c31-3dbc-4900-bd78-f830a3bfffd2",
+      "name": "Notify Admin (Error)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -3040,
+        3088
+      ],
+      "webhookId": "dd220ddc-81b1-40f6-80ea-051733024986",
+      "credentials": {
+        "telegramApi": {
+          "id": "i1k7Qu5sIBO3ky1W",
+          "name": "n8n course"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Is Callback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Report Trigger": {
+      "main": [
+        [
+          {
+            "node": "DB Get Users for Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Callback?": {
+      "main": [
+        [
+          {
+            "node": "Parse Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Redis Get State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Callback": {
+      "main": [
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Get State": {
+      "main": [
+        [
+          {
+            "node": "Determine Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Action": {
+      "main": [
+        [
+          {
+            "node": "Action Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Router": {
+      "main": [
+        [
+          {
+            "node": "Redis Set Limit State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validate Budget",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB Get Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB Get Report Stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Expense Chain",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Set Limit State": {
+      "main": [
+        [
+          {
+            "node": "DB Upsert User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Upsert User": {
+      "main": [
+        [
+          {
+            "node": "Send Welcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Budget": {
+      "main": [
+        [
+          {
+            "node": "Is Budget Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Budget Valid?": {
+      "main": [
+        [
+          {
+            "node": "DB Save Budget",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Budget Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Save Budget": {
+      "main": [
+        [
+          {
+            "node": "Redis Set Base State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Set Base State": {
+      "main": [
+        [
+          {
+            "node": "Send Budget Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Parse Expense": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Expense Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Expense Chain": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Is Expense Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Expense Valid?": {
+      "main": [
+        [
+          {
+            "node": "DB Save Expense",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Expense Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Save Expense": {
+      "main": [
+        [
+          {
+            "node": "DB Get Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Stats": {
+      "main": [
+        [
+          {
+            "node": "Format Expense Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Expense Saved": {
+      "main": [
+        [
+          {
+            "node": "Send Expense Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Status": {
+      "main": [
+        [
+          {
+            "node": "Format Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Status": {
+      "main": [
+        [
+          {
+            "node": "Send Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Report Stats": {
+      "main": [
+        [
+          {
+            "node": "DB Get Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Categories": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is AI Advice?": {
+      "main": [
+        [
+          {
+            "node": "DB Get Advice Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Advice Stats": {
+      "main": [
+        [
+          {
+            "node": "DB Get Advice Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Advice Categories": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Data": {
+      "main": [
+        [
+          {
+            "node": "AI Advice Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Financial Advisor": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Advice Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Advice Chain": {
+      "main": [
+        [
+          {
+            "node": "Send AI Advice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Users for Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Loop Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Users": {
+      "main": [
+        [
+          {
+            "node": "DB Get Yesterday Expenses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB Get Yesterday Expenses": {
+      "main": [
+        [
+          {
+            "node": "Format Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Wait (Rate Limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait (Rate Limit)": {
+      "main": [
+        [
+          {
+            "node": "Loop Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Callback Query": {
+      "main": [
+        [
+          {
+            "node": "Is AI Advice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin (Error)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "a1214ff3-55e3-4399-aafa-9e25d2d71c71",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d7d1941268294cd91533f11b9fb37f3a0fc62b2db257b3cd317249b335c91767"
+  },
+  "id": "Z19S3XWzFpuYVnv1w_RXn",
+  "tags": [
+    {
+      "updatedAt": "2026-01-23T12:10:01.371Z",
+      "createdAt": "2026-01-23T12:10:01.371Z",
+      "id": "I5kJZN8ltP2UhgpG",
+      "name": "Telegram"
+    },
+    {
+      "updatedAt": "2026-01-23T12:10:01.453Z",
+      "createdAt": "2026-01-23T12:10:01.453Z",
+      "id": "Yu4zGK5Xf8G0bq8h",
+      "name": "Production"
+    },
+    {
+      "updatedAt": "2026-01-23T12:10:01.415Z",
+      "createdAt": "2026-01-23T12:10:01.415Z",
+      "id": "uFEtYy0JHYXweGct",
+      "name": "Finance"
+    },
+    {
+      "updatedAt": "2026-01-23T12:10:01.344Z",
+      "createdAt": "2026-01-23T12:10:01.344Z",
+      "id": "xRu5bJJ4IX3OFPze",
+      "name": "AI"
+    }
+  ]
+}
