@@ -119,7 +119,7 @@
     {
       "parameters": {
         "operation": "get",
-        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "key": "={{ 'budget_bot:state:' + $json.chatId }}",
         "options": {}
       },
       "id": "09cb581c-1022-4637-a0f8-2ab5521f5988",
@@ -306,7 +306,7 @@
     {
       "parameters": {
         "operation": "set",
-        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "key": "={{ 'budget_bot:state:' + $json.chatId }}",
         "value": "set_limit",
         "expire": true,
         "ttl": 2592000
@@ -456,7 +456,7 @@
     {
       "parameters": {
         "operation": "set",
-        "key": "=budget_bot:state:{{ $json.chatId }}",
+        "key": "={{ 'budget_bot:state:' + $json.chatId }}",
         "value": "base",
         "expire": true,
         "ttl": 2592000
