@@ -5,13 +5,15 @@
 ## Repository Overview
 
 **Project Name:** Test
-**Status:** Initial Setup
-**Last Updated:** 2026-01-23
+**Status:** Active Development
+**Last Updated:** 2026-01-25
 
-This repository integrates with n8n workflow automation via MCP (Model Context Protocol). Update this section as the project develops with:
-- Project purpose and goals
-- Target audience/users
-- Key features
+This repository provides integration between **Supabase** (backend database) and **n8n** (workflow automation) via MCP (Model Context Protocol). It includes:
+
+- **Supabase SDK wrapper** - Simplified JavaScript modules for database, auth, realtime, and storage operations
+- **n8n API client** - JavaScript client for managing n8n workflows and executions
+- **Budget Bot** - A Telegram bot workflow for expense tracking with PostgreSQL backend
+- **Workflow management** - Export/import n8n workflows as JSON files
 
 ## Project Structure
 
@@ -19,18 +21,31 @@ This repository integrates with n8n workflow automation via MCP (Model Context P
 /home/user/Test/
 ├── .git/                    # Git version control
 ├── .gitignore               # Git ignore patterns
-├── .mcp.json                # MCP server configuration
+├── .mcp.json                # MCP server configuration (gitignored)
 ├── CLAUDE.md                # This file - AI assistant guidelines
 ├── package.json             # npm package configuration
-├── node_modules/            # npm dependencies
-└── src/
-    └── supabase/            # Supabase integration modules
-        ├── index.js         # Main export file
-        ├── client.js        # Supabase client configuration
-        ├── data.js          # CRUD operations (read, insert, update, delete)
-        ├── auth.js          # Authentication operations
-        ├── realtime.js      # Realtime subscriptions
-        └── storage.js       # File storage operations
+├── package-lock.json        # npm dependency lock file
+├── node_modules/            # npm dependencies (gitignored)
+├── scripts/
+│   └── list-workflows.js    # CLI script to list n8n workflows
+├── sql/
+│   └── budget_bot_schema.sql # PostgreSQL schema for Budget Bot
+├── src/
+│   ├── n8n/                 # n8n API client modules
+│   │   ├── index.js         # Main export file
+│   │   └── client.js        # n8n API client (workflows, executions)
+│   └── supabase/            # Supabase integration modules
+│       ├── index.js         # Main export file
+│       ├── client.js        # Supabase client configuration
+│       ├── data.js          # CRUD operations (read, insert, update, delete, rpc)
+│       ├── auth.js          # Authentication operations
+│       ├── realtime.js      # Realtime subscriptions (postgres_changes, broadcast, presence)
+│       └── storage.js       # File storage operations
+└── workflows/
+    └── n8n/                 # Exported n8n workflow JSON files
+        ├── README.md        # Workflow documentation
+        ├── budget-bot.json  # Budget Bot workflow
+        └── Budget Bot Fixed.json # Fixed version of Budget Bot
 ```
 
 ### Directory Conventions
@@ -38,18 +53,22 @@ This repository integrates with n8n workflow automation via MCP (Model Context P
 | Directory | Purpose |
 |-----------|---------|
 | `src/supabase/` | Supabase client and operation modules |
+| `src/n8n/` | n8n API client for workflow management |
+| `scripts/` | CLI utility scripts |
+| `sql/` | PostgreSQL schema and migration files |
+| `workflows/n8n/` | Exported n8n workflow JSON files |
 | `tests/` | Test files (to be added) |
-| `docs/` | Documentation |
-| `scripts/` | Utility scripts |
 
 ## Technology Stack
 
 - **Backend:** Supabase (PostgreSQL, Auth, Realtime, Storage)
+- **Database:** PostgreSQL via Supabase with RLS (Row Level Security)
 - **MCP Integration:** n8n-mcp (Model Context Protocol server for n8n)
 - **Automation:** n8n workflow automation (https://ulucky.app.n8n.cloud)
 - **Language:** JavaScript (Node.js)
 - **Package Manager:** npm
-- **Dependencies:** @supabase/supabase-js
+- **Dependencies:**
+  - `@supabase/supabase-js` (^2.91.0) - Supabase JavaScript client
 - **Testing Framework:** TBD
 
 ## Development Workflow
@@ -65,9 +84,16 @@ cd Test
 npm install
 
 # Set environment variables
-export SUPABASE_URL="your-supabase-url"
+export SUPABASE_URL="https://your-project.supabase.co"
 export SUPABASE_ANON_KEY="your-anon-key"
 export SUPABASE_SERVICE_KEY="your-service-key"  # Optional, for admin operations
+export N8N_API_KEY="your-n8n-api-key"           # Required for n8n integration
+
+# (Optional) Set up the Budget Bot database schema
+# Run sql/budget_bot_schema.sql in Supabase SQL Editor
+
+# List available n8n workflows
+npm run workflows
 ```
 
 ### Common Commands
@@ -75,24 +101,67 @@ export SUPABASE_SERVICE_KEY="your-service-key"  # Optional, for admin operations
 | Command | Description |
 |---------|-------------|
 | `npm install` | Install dependencies |
-| `npm test` | Run tests |
+| `npm test` | Run tests (not yet configured) |
+| `npm run workflows` | List all n8n workflows |
 
-### Usage Example
+### Usage Examples
+
+#### Supabase Operations
 
 ```javascript
-const { read, insert, auth, storage } = require('./src/supabase');
+const { read, insert, update, remove, rpc, auth, storage, realtime } = require('./src/supabase');
 
-// Read data
-const users = await read('users', { limit: 10 });
+// Read data with filters and ordering
+const users = await read('users', {
+  filters: { chat_id: 123456789 },
+  order: { created_at: 'desc' },
+  limit: 10
+});
 
-// Insert data
-await insert('users', { name: 'John', email: 'john@example.com' });
+// Insert data (single or array)
+await insert('expenses', { chat_id: 123, category: 'food', amount: 50.00 });
+
+// Update data
+await update('users', { budget_limit: 1000 }, { chat_id: 123 });
+
+// Delete data
+await remove('expenses', { id: 1 });
+
+// Call stored procedure (RPC)
+const stats = await rpc('get_monthly_stats', { p_chat_id: 123456789 });
 
 // Authentication
 await auth.signIn('user@example.com', 'password');
+await auth.signUp('user@example.com', 'password', { data: { name: 'John' } });
 
 // Storage
 await storage.upload('avatars', 'user1.png', fileBuffer);
+const url = storage.getPublicUrl('avatars', 'user1.png');
+
+// Realtime subscriptions
+realtime.onInsert('expenses', (payload) => {
+  console.log('New expense:', payload.new);
+});
+```
+
+#### n8n API Operations
+
+```javascript
+const { getWorkflows, getWorkflow, activateWorkflow, getExecutions } = require('./src/n8n');
+
+// List all workflows
+const workflows = await getWorkflows();
+const activeOnly = await getWorkflows({ active: true });
+
+// Get specific workflow
+const workflow = await getWorkflow('workflow-id');
+
+// Activate/deactivate workflows
+await activateWorkflow('workflow-id');
+await deactivateWorkflow('workflow-id');
+
+// Get execution history
+const executions = await getExecutions({ workflowId: 'id', status: 'success' });
 ```
 
 ### Git Workflow
@@ -113,26 +182,39 @@ await storage.upload('avatars', 'user1.png', fileBuffer);
 
 ## Code Conventions
 
-> Establish and document coding standards here as the project develops.
+### JavaScript Guidelines
 
-### General Guidelines
-
-- Write clean, readable, self-documenting code
-- Follow language-specific best practices
-- Keep functions/methods focused and small
-- Add comments only when logic is not self-evident
-- Avoid over-engineering - implement only what's needed
+- Use `const` for constants and `let` for variables (avoid `var`)
+- Use async/await for asynchronous operations
+- Export functions via `module.exports` (CommonJS)
+- Use JSDoc comments for function documentation
+- Handle errors with try/catch and throw meaningful error messages
+- Use destructuring for imports: `const { func1, func2 } = require('./module')`
 
 ### File Naming
 
-- Use consistent naming conventions (to be established)
-- Keep file names descriptive and concise
+- Use lowercase with hyphens for files: `budget-bot.json`, `list-workflows.js`
+- Use camelCase for JavaScript module files: `client.js`, `realtime.js`
+- SQL files use underscores: `budget_bot_schema.sql`
+
+### Module Pattern
+
+Each module follows this pattern:
+```javascript
+const { dependency } = require('./other-module');
+
+async function operation(params) {
+  // Implementation
+}
+
+module.exports = { operation };
+```
 
 ### Documentation
 
-- Maintain up-to-date README.md
-- Document public APIs
-- Include usage examples where helpful
+- JSDoc comments for all exported functions
+- Include `@param` and `@returns` annotations
+- Document options objects with their properties
 
 ## Testing Guidelines
 
@@ -174,19 +256,24 @@ await storage.upload('avatars', 'user1.png', fileBuffer);
 ### Prerequisites
 
 - Git installed
-- (Add language runtime requirements)
-- (Add other dependencies)
+- Node.js (v16 or later recommended)
+- npm (comes with Node.js)
+- Supabase project with credentials
+- n8n cloud instance (optional, for workflow automation)
 
 ### Environment Variables
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `SUPABASE_URL` | Supabase project URL | Yes |
-| `SUPABASE_ANON_KEY` | Supabase anonymous/public key | Yes |
-| `SUPABASE_SERVICE_KEY` | Supabase service role key (admin) | No |
+| `SUPABASE_ANON_KEY` | Supabase anonymous/public key | Yes* |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key (bypasses RLS) | No |
+| `N8N_API_URL` | n8n instance URL (default: https://ulucky.app.n8n.cloud) | No |
 | `N8N_API_KEY` | API key for n8n cloud instance | Yes |
 
-**Note:** Never commit API keys to the repository. Set environment variables locally or use a secrets manager.
+*Either `SUPABASE_ANON_KEY` or `SUPABASE_SERVICE_KEY` must be set.
+
+**Note:** Never commit API keys to the repository. Set environment variables locally or use a secrets manager. The `.mcp.json` file is gitignored for this reason.
 
 ### MCP Configuration
 
@@ -202,14 +289,51 @@ export N8N_API_KEY="your-api-key-here"
 
 The n8n-mcp server provides workflow automation capabilities through the n8n platform.
 
-## Troubleshooting
+## Key Features
 
-> Document common issues and solutions here.
+### Budget Bot
+
+A Telegram bot workflow for personal expense tracking. The bot allows users to:
+- Track expenses by category
+- Set monthly budget limits
+- View spending statistics and reports
+- Compare spending across months
+
+**Database schema:** `sql/budget_bot_schema.sql`
+
+**Tables:**
+- `users` - User profiles with budget limits (keyed by `chat_id`)
+- `expenses` - Individual expense records with category, amount, and date
+
+**PostgreSQL Functions (RPC):**
+| Function | Description |
+|----------|-------------|
+| `get_monthly_stats(p_chat_id)` | Monthly spending summary with budget status |
+| `get_category_stats(p_chat_id)` | Breakdown by category for current month |
+| `get_yesterday_expenses(p_chat_id)` | Expenses from previous day |
+| `get_expenses_by_period(p_chat_id, start, end)` | Expenses within date range |
+| `get_daily_stats(p_chat_id, p_date)` | Single day statistics |
+| `get_top_categories(p_chat_id, p_limit)` | Top spending categories all-time |
+| `get_month_comparison(p_chat_id)` | Compare current vs previous month |
+
+### n8n Workflow Management
+
+Workflows are stored in `workflows/n8n/` as JSON files. See `workflows/n8n/README.md` for import/export instructions.
+
+**File naming:** Use kebab-case (e.g., `budget-bot.json`)
+
+## Troubleshooting
 
 ### Common Issues
 
-1. **Issue:** TBD
-   - **Solution:** TBD
+1. **Issue:** `SUPABASE_URL is required` error
+   - **Solution:** Set the `SUPABASE_URL` environment variable
+
+2. **Issue:** `N8N_API_KEY is not set` warning
+   - **Solution:** Set the `N8N_API_KEY` environment variable for n8n API access
+
+3. **Issue:** RPC function not found
+   - **Solution:** Run the SQL schema in `sql/budget_bot_schema.sql` in Supabase SQL Editor
 
 ## Resources
 
