@@ -14,20 +14,26 @@
         "promptType": "define",
         "text": "Сообщение кандидата: {{ $json.user_message }}\n\nИзвестные данные о кандидате:\n{{ JSON.stringify($json.known_data) }}\n\nИстория диалога:\n{{ $json.chat_history_text }}\n\nДоступные вакансии:\n{{ $json.vacancies_text }}",
         "options": {
-          "systemMessage": "Ты — дружелюбный рекрутер BestHotel. Проводишь первичное собеседование (скрининг). 🏨\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Говори ТОЛЬКО о вакансиях из раздела \"Доступные вакансии\"\n2. Если вакансии НЕТ в списке — НИКОГДА не упоминай её\n3. ЗАПРЕЩЕНО придумывать зарплаты, условия или графики\n4. Используй ТОЛЬКО данные из промпта\n\nТВОЯ ЗАДАЧА:\n1. Собрать данные: имя, фамилию, гражданство, возраст, опыт работы, наличие документов, телефон\n2. Использовать \"крючки\": стабильность, легальность, регулярная оплата\n3. Задавать вопросы ПО ОДНОМУ\n4. НЕ ПЕРЕСПРАШИВАТЬ то, что кандидат уже сказал\n\nПРАВИЛА:\n- Если данные есть в known_data → НЕ спрашивай повторно\n- Если кандидат написал несколько данных сразу → извлеки ВСЁ\n- Отвечай 2-3 предложениями с 2-3 эмодзи\n- Когда ВСЕ обязательные данные собраны → установи interview_complete: true\n\nОБЯЗАТЕЛЬНЫЕ ДАННЫЕ ДЛЯ ЗАВЕРШЕНИЯ:\n- first_name (имя)\n- citizenship (гражданство)\n- age (возраст)\n- experience (опыт работы)\n- documents_status (yes/no/processing)\n- phone (телефон)\n\nОтвечай ТОЛЬКО JSON без markdown:\n{\n  \"message\": \"текст для кандидата\",\n  \"extracted_data\": {\n    \"first_name\": \"Имя или null\",\n    \"last_name\": \"Фамилия или null\",\n    \"citizenship\": \"Гражданство или null\",\n    \"age\": число или null,\n    \"experience\": \"Описание опыта или null\",\n    \"documents_status\": \"yes/no/processing или null\",\n    \"phone\": \"Телефон или null\"\n  },\n  \"interview_complete\": false,\n  \"needs_escalation\": false\n}"
+          "systemMessage": "Ты — дружелюбный рекрутер BestHotel. Проводишь первичное собеседование (скрининг). 🏨\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Говори ТОЛЬКО о вакансиях из раздела \"Доступные вакансии\"\n2. Если вакансии НЕТ в списке — НИКОГДА не упоминай её\n3. ЗАПРЕЩЕНО придумывать зарплаты, условия или графики\n4. Используй ТОЛЬКО данные из промпта\n\nТВОЯ ЗАДАЧА:\n1. Собрать данные: имя, фамилию, гражданство, возраст, опыт работы, документы/приложение Амина, телефон\n2. Использовать \"крючки\": стабильность, легальность, регулярная оплата\n3. Задавать вопросы ПО ОДНОМУ\n4. НЕ ПЕРЕСПРАШИВАТЬ то, что кандидат уже сказал\n\nПРАВИЛА ДОКУМЕНТОВ:\nКандидату достаточно ОДНО из двух:\n- Полный пакет документов: паспорт + миграционная карта + регистрация\n- ИЛИ приложение \"Амина\" (заменяет все документы)\n\nПри вопросе о документах спрашивай:\n\"У вас есть приложение Амина или полный пакет документов (паспорт, миграционная карта, регистрация)?\"\n\nПРАВИЛА:\n- Если данные есть в known_data → НЕ спрашивай повторно\n- Если кандидат написал несколько данных сразу → извлеки ВСЁ\n- Отвечай 2-3 предложениями с 2-3 эмодзи\n- КРИТИЧНО: Когда ВСЕ обязательные данные собраны → СНАЧАЛА покажи сводку и попроси подтвердить\n\nОБЯЗАТЕЛЬНЫЕ ДАННЫЕ ДЛЯ ЗАВЕРШЕНИЯ:\n- first_name (имя)\n- citizenship (гражданство: Кыргызстан, Узбекистан, Таджикистан и т.д.)\n- age (возраст — число от 18 до 65)\n- experience (опыт работы — описание)\n- documents_status (yes/no/processing) ИЛИ has_amina_app (true/false)\n- phone (телефон в формате +7XXXXXXXXXX или 8XXXXXXXXXX)\n\nКОГДА ВСЕ ДАННЫЕ СОБРАНЫ:\n1. Покажи сводку: \"Давайте проверим ваши данные: Имя: X, Гражданство: X, Возраст: X, Опыт: X, Документы: X, Телефон: X. Всё верно?\"\n2. Установи awaiting_confirmation: true\n3. НЕ устанавливай interview_complete: true пока кандидат не подтвердит\n\nКОГДА КАНДИДАТ ПОДТВЕРДИЛ (да/верно/правильно/подтверждаю):\n- Установи interview_complete: true\n- Напиши: \"Отлично! Ваша анкета принята. HR-менеджер свяжется с вами в ближайшее время! 🎉\"\n\nОтвечай ТОЛЬКО JSON без markdown:\n{\n  \"message\": \"текст для кандидата\",\n  \"extracted_data\": {\n    \"first_name\": \"Имя или null\",\n    \"last_name\": \"Фамилия или null\",\n    \"citizenship\": \"Гражданство или null\",\n    \"age\": число или null,\n    \"experience\": \"Описание опыта или null\",\n    \"documents_status\": \"yes/no/processing или null\",\n    \"has_amina_app\": true/false или null,\n    \"phone\": \"Телефон или null\",\n    \"russian_level\": \"хороший/базовый/слабый или null\"\n  },\n  \"awaiting_confirmation\": false,\n  \"interview_complete\": false,\n  \"needs_escalation\": false\n}",
+          "timeout": 15000
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [220, 0],
       "id": "interview-agent",
-      "name": "Interview Agent"
+      "name": "Interview Agent",
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
         "options": {
-          "maxTokens": 500,
-          "temperature": 0.5
+          "maxTokens": 600,
+          "temperature": 0.4,
+          "timeout": 15000
         }
       },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
@@ -44,13 +50,23 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================================\n// INTERVIEW AGENT: Format Response (v3.0)\n// ============================================================\n\nconst context = $('Execute Workflow Trigger').first().json;\nconst response = $json;\n\nlet parsed = {\n  message: 'Расскажите немного о себе. Как вас зовут? 🤝',\n  extracted_data: {},\n  interview_complete: false,\n  needs_escalation: false\n};\n\ntry {\n  const rawOutput = response.text || response.output || response.content || '';\n  const cleanJson = String(rawOutput)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Interview parse error:', e.message);\n}\n\n// Мержим известные данные с новыми\nconst mergedData = { ...context.known_data };\nif (parsed.extracted_data) {\n  Object.keys(parsed.extracted_data).forEach(key => {\n    const value = parsed.extracted_data[key];\n    if (value && value !== 'unknown' && value !== null && value !== 'null' && value !== '') {\n      mergedData[key] = value;\n    }\n  });\n}\n\n// Проверяем полноту данных для автоматического завершения\nconst requiredFields = ['first_name', 'citizenship', 'age', 'documents_status', 'phone'];\nconst filledFields = requiredFields.filter(f => \n  mergedData[f] && mergedData[f] !== null && mergedData[f] !== 'unknown'\n);\nconst isComplete = filledFields.length >= 5 || parsed.interview_complete;\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  language: context.language,\n  route_category: context.route_category,\n  vacancies: context.vacancies,\n  \n  // Response\n  response_message: parsed.message,\n  final_message: parsed.message,\n  extracted_data: mergedData,\n  interview_complete: isComplete,\n  show_language_buttons: false,\n  needs_escalation: parsed.needs_escalation || false,\n  \n  // Debug info\n  filled_fields: filledFields.length,\n  required_fields: requiredFields.length\n};"
+        "jsCode": "// ============================================================\n// INTERVIEW AGENT: Format Response (v4.0 - Enhanced)\n// Добавлено: валидация телефона, Амина, подтверждение данных\n// ============================================================\n\nconst context = $('Execute Workflow Trigger').first().json;\nconst response = $json;\n\nlet parsed = {\n  message: 'Расскажите немного о себе. Как вас зовут? 🤝',\n  extracted_data: {},\n  interview_complete: false,\n  awaiting_confirmation: false,\n  needs_escalation: false\n};\n\ntry {\n  const rawOutput = response.text || response.output || response.content || '';\n  const cleanJson = String(rawOutput)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Interview parse error:', e.message);\n}\n\n// Мержим известные данные с новыми\nconst mergedData = { ...context.known_data };\nif (parsed.extracted_data) {\n  Object.keys(parsed.extracted_data).forEach(key => {\n    const value = parsed.extracted_data[key];\n    if (value && value !== 'unknown' && value !== null && value !== 'null' && value !== '') {\n      mergedData[key] = value;\n    }\n  });\n}\n\n// ============================================================\n// ВАЛИДАЦИЯ ТЕЛЕФОНА\n// ============================================================\nif (mergedData.phone) {\n  let phone = String(mergedData.phone).replace(/[\\s\\-\\(\\)]/g, '');\n  // Приводим к формату +7XXXXXXXXXX\n  if (phone.startsWith('8') && phone.length === 11) {\n    phone = '+7' + phone.substring(1);\n  } else if (phone.startsWith('7') && phone.length === 11) {\n    phone = '+' + phone;\n  } else if (!phone.startsWith('+')) {\n    phone = '+' + phone;\n  }\n  \n  // Проверяем формат\n  const phoneRegex = /^\\+7\\d{10}$/;\n  if (!phoneRegex.test(phone)) {\n    // Телефон невалидный, просим уточнить\n    mergedData.phone = null;\n    if (!parsed.message.includes('телефон')) {\n      parsed.message += '\\n\\n📱 Пожалуйста, уточните ваш телефон в формате +7XXXXXXXXXX';\n    }\n  } else {\n    mergedData.phone = phone;\n  }\n}\n\n// ============================================================\n// ПРОВЕРКА ПОЛНОТЫ ДАННЫХ\n// ============================================================\nconst hasDocuments = mergedData.documents_status === 'yes' || mergedData.has_amina_app === true;\nconst requiredFields = ['first_name', 'citizenship', 'age', 'phone'];\nconst filledRequired = requiredFields.filter(f => \n  mergedData[f] && mergedData[f] !== null && mergedData[f] !== 'unknown'\n);\n\nconst allDataCollected = filledRequired.length >= 4 && hasDocuments;\n\n// ============================================================\n// ЛОГИКА ПОДТВЕРЖДЕНИЯ\n// ============================================================\nlet isComplete = false;\nlet awaitingConfirmation = parsed.awaiting_confirmation || false;\n\n// Если все данные собраны и ожидаем подтверждения\nif (allDataCollected && !parsed.interview_complete) {\n  // Проверяем, подтвердил ли кандидат\n  const userMsg = (context.user_message || '').toLowerCase();\n  const confirmWords = ['да', 'верно', 'правильно', 'подтверждаю', 'все верно', 'всё верно', 'yes', 'ok', 'ок'];\n  const isConfirmed = confirmWords.some(w => userMsg.includes(w));\n  \n  if (isConfirmed && context.known_data && Object.keys(context.known_data).length >= 4) {\n    // Кандидат подтвердил данные\n    isComplete = true;\n    awaitingConfirmation = false;\n  } else if (!awaitingConfirmation) {\n    // Показываем сводку для подтверждения\n    awaitingConfirmation = true;\n  }\n}\n\nif (parsed.interview_complete) {\n  isComplete = true;\n}\n\nreturn {\n  // Context passthrough\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  language: context.language,\n  route_category: context.route_category,\n  vacancies: context.vacancies,\n  \n  // Response\n  response_message: parsed.message,\n  final_message: parsed.message,\n  extracted_data: mergedData,\n  interview_complete: isComplete,\n  awaiting_confirmation: awaitingConfirmation,\n  show_language_buttons: false,\n  needs_escalation: parsed.needs_escalation || false,\n  \n  // Debug info\n  filled_required: filledRequired.length,\n  has_documents: hasDocuments,\n  all_data_collected: allDataCollected\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [440, 0],
       "id": "format-response",
       "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// INTERVIEW AGENT: LLM Error Fallback (v4.0)\n// Если LLM недоступен, просим повторить позже\n// ============================================================\n\nconst context = $('Execute Workflow Trigger').first().json;\n\nconsole.log('⚠️ Interview Agent LLM error, using fallback');\n\nconst fallbackMessage = 'Извините, произошла техническая ошибка. 🔧\\n\\n' +\n  'Пожалуйста, повторите ваше сообщение через несколько секунд.';\n\nreturn {\n  user_id: context.user_id,\n  chat_id: context.chat_id,\n  session_id: context.session_id,\n  user_message: context.user_message,\n  language: context.language,\n  route_category: context.route_category,\n  vacancies: context.vacancies,\n  \n  response_message: fallbackMessage,\n  final_message: fallbackMessage,\n  extracted_data: context.known_data || {},\n  interview_complete: false,\n  awaiting_confirmation: false,\n  show_language_buttons: false,\n  needs_escalation: false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200],
+      "id": "llm-error-fallback",
+      "name": "LLM Error Fallback"
     },
     {
       "parameters": {
@@ -73,16 +89,22 @@
       "ai_languageModel": [[{"node": "Interview Agent", "type": "ai_languageModel", "index": 0}]]
     },
     "Interview Agent": {
-      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+      "main": [
+        [{"node": "Format Response", "type": "main", "index": 0}],
+        [{"node": "LLM Error Fallback", "type": "main", "index": 0}]
+      ]
     },
     "Format Response": {
+      "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
+    },
+    "LLM Error Fallback": {
       "main": [[{"node": "Call Response Sender", "type": "main", "index": 0}]]
     }
   },
   "pinData": {},
   "settings": {"executionOrder": "v1"},
   "staticData": null,
-  "tags": [{"name": "HR Bot"}, {"name": "Agent"}],
+  "tags": [{"name": "HR Bot"}, {"name": "Agent"}, {"name": "Optimized"}],
   "triggerCount": 0,
   "meta": {"instanceId": "hr-bot-v2"}
 }

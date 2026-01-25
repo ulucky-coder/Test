@@ -22,16 +22,16 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT \n  id as session_id,\n  telegram_user_id,\n  language,\n  status,\n  first_name as session_first_name,\n  started_at\nFROM candidate_sessions\nWHERE telegram_user_id = $1\nLIMIT 1",
+        "query": "-- ============================================================\n-- OPTIMIZED: Single query with CTE (v4.0)\n-- Объединяет 4 запроса в 1 для эффективности\n-- ============================================================\n\nWITH upserted_session AS (\n  INSERT INTO candidate_sessions (\n    telegram_user_id,\n    first_name,\n    status,\n    started_at,\n    language\n  ) VALUES ($1, $2, 'in_progress', NOW(), 'ru')\n  ON CONFLICT (telegram_user_id) \n  DO UPDATE SET \n    status = CASE \n      WHEN candidate_sessions.status = 'completed' THEN 'in_progress'\n      ELSE candidate_sessions.status \n    END,\n    first_name = COALESCE(EXCLUDED.first_name, candidate_sessions.first_name)\n  RETURNING id, telegram_user_id, status, language, first_name\n),\nactive_vacancies AS (\n  SELECT \n    json_agg(json_build_object(\n      'id', id,\n      'position_name', position_name,\n      'pain_points', pain_points,\n      'benefits', benefits,\n      'salary_min', salary_min,\n      'salary_max', salary_max,\n      'minimum_score', minimum_score\n    )) as vacancies\n  FROM vacancies \n  WHERE status = 'active'\n  LIMIT 10\n),\nchat_history AS (\n  SELECT \n    json_agg(json_build_object(\n      'user_message', user_message,\n      'bot_response', bot_response,\n      'extracted_data', extracted_data,\n      'created_at', created_at\n    ) ORDER BY created_at DESC) as history\n  FROM n8n_chat_histories\n  WHERE session_id = (SELECT id FROM upserted_session)\n  LIMIT 15\n)\nSELECT \n  us.id as session_id,\n  us.telegram_user_id,\n  us.status as session_status,\n  us.language,\n  us.first_name as session_first_name,\n  COALESCE(av.vacancies, '[]'::json) as vacancies,\n  COALESCE(ch.history, '[]'::json) as chat_history\nFROM upserted_session us\nCROSS JOIN active_vacancies av\nCROSS JOIN chat_history ch;",
         "options": {
-          "queryReplacement": "={{ [$json.user_id] }}"
+          "queryReplacement": "={{ [$json.user_id, $json.first_name || null] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [440, 0],
-      "id": "load-session",
-      "name": "Load Session",
+      "id": "load-all-data",
+      "name": "Load All Data (Optimized)",
       "alwaysOutputData": true,
       "credentials": {
         "postgres": {
@@ -39,78 +39,30 @@
           "name": "Postgres account"
         }
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 500
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO candidate_sessions (\n  telegram_user_id,\n  first_name,\n  status,\n  started_at,\n  language\n) VALUES ($1, $2, 'in_progress', NOW(), 'ru')\nON CONFLICT (telegram_user_id) \nDO UPDATE SET \n  status = CASE \n    WHEN candidate_sessions.status = 'completed' THEN 'in_progress'\n    ELSE candidate_sessions.status \n  END,\n  first_name = COALESCE(EXCLUDED.first_name, candidate_sessions.first_name)\nRETURNING id as session_id, telegram_user_id, status, language, first_name as session_first_name",
-        "options": {
-          "queryReplacement": "={{ [$('Extract Input').first().json.user_id, $('Extract Input').first().json.first_name || null] }}"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [660, 0],
-      "id": "upsert-session",
-      "name": "Upsert Session",
-      "alwaysOutputData": true,
-      "credentials": {
-        "postgres": {
-          "id": "0AYoJYr8BGzKVyG6",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT \n  id,\n  position_name,\n  pain_points,\n  benefits,\n  salary_min,\n  salary_max,\n  minimum_score,\n  status\nFROM vacancies \nWHERE status = 'active'\nORDER BY id\nLIMIT 10",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [880, 0],
-      "id": "load-vacancies",
-      "name": "Load Vacancies",
-      "alwaysOutputData": true,
-      "credentials": {
-        "postgres": {
-          "id": "0AYoJYr8BGzKVyG6",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT \n  user_message,\n  bot_response,\n  extracted_data,\n  created_at\nFROM n8n_chat_histories\nWHERE session_id = $1::uuid\nORDER BY created_at DESC\nLIMIT 15",
-        "options": {
-          "queryReplacement": "={{ [$('Upsert Session').first().json.session_id] }}"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [1100, 0],
-      "id": "load-history",
-      "name": "Load Chat History",
-      "alwaysOutputData": true,
-      "credentials": {
-        "postgres": {
-          "id": "0AYoJYr8BGzKVyG6",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// ============================================================\n// SESSION MANAGER: Merge Context (v3.0)\n// ============================================================\n\nconst trigger = $('Extract Input').first().json;\nconst sessionResult = $('Upsert Session').all();\nconst session = sessionResult.length > 0 && sessionResult[0].json.session_id \n  ? sessionResult[0].json \n  : { session_id: null, language: 'ru', status: 'new' };\n\nconst vacanciesResult = $('Load Vacancies').all();\nconst vacancies = vacanciesResult.map(v => v.json).filter(v => v.id);\n\nconst historyResult = $('Load Chat History').all();\nconst chatHistory = historyResult.map(h => h.json).filter(h => h.user_message);\n\n// Собираем известные данные из истории\nlet knownData = {\n  first_name: null,\n  last_name: null,\n  citizenship: null,\n  age: null,\n  experience: null,\n  documents_status: null,\n  phone: null,\n  position_interest: null\n};\n\n// Объединяем extracted_data из всей истории (от старых к новым)\nchatHistory.slice().reverse().forEach(h => {\n  if (h.extracted_data) {\n    try {\n      const data = typeof h.extracted_data === 'string' \n        ? JSON.parse(h.extracted_data) \n        : h.extracted_data;\n      Object.keys(data).forEach(key => {\n        if (data[key] && data[key] !== 'unknown' && data[key] !== null && data[key] !== '') {\n          knownData[key] = data[key];\n        }\n      });\n    } catch (e) {\n      // ignore parse errors\n    }\n  }\n});\n\n// Определяем, новый ли это пользователь\nconst isNewUser = chatHistory.length === 0;\n\n// Форматируем вакансии для промпта\nconst vacanciesText = vacancies.length > 0\n  ? vacancies.map(v => \n      `📌 ${v.position_name}\\n💰 Зарплата: ${v.salary_min || '?'}-${v.salary_max || '?'} руб.\\n📋 ${v.benefits || 'Условия уточняйте'}`\n    ).join('\\n\\n')\n  : 'Вакансии загружаются...';\n\n// Форматируем историю для контекста AI\nconst chatHistoryText = chatHistory.length > 0\n  ? 'ПОСЛЕДНИЕ СООБЩЕНИЯ (от новых к старым):\\n' + chatHistory.slice(0, 10).map((h, i) => \n      `${i + 1}. Кандидат: \"${h.user_message}\"\\n   Бот: \"${(h.bot_response || '').substring(0, 100)}${h.bot_response?.length > 100 ? '...' : ''}\"`\n    ).join('\\n\\n')\n  : 'История диалога пуста (новый пользователь)';\n\n// Финальный контекст\nreturn {\n  // User data\n  user_id: trigger.user_id,\n  user_message: trigger.text,\n  chat_id: trigger.chat_id,\n  first_name: trigger.first_name || knownData.first_name || '',\n  username: trigger.username,\n  message_id: trigger.message_id,\n  \n  // Session data\n  session_id: session.session_id,\n  language: session.language || 'ru',\n  session_status: session.status || 'new',\n  is_new_user: isNewUser,\n  \n  // Vacancy data\n  vacancies: vacancies,\n  vacancies_text: vacanciesText,\n  \n  // Known candidate data\n  known_data: knownData,\n  \n  // Chat history\n  chat_history: chatHistory.slice(0, 10),\n  chat_history_text: chatHistoryText,\n  \n  // Meta\n  timestamp: trigger.timestamp,\n  is_callback: trigger.is_callback,\n  callback_data: trigger.callback_data\n};"
+        "jsCode": "// ============================================================\n// SESSION MANAGER: Merge Context (v4.0 - Optimized)\n// ============================================================\n\nconst trigger = $('Extract Input').first().json;\nconst dbResult = $('Load All Data (Optimized)').first().json;\n\nconst session = {\n  session_id: dbResult.session_id,\n  language: dbResult.language || 'ru',\n  status: dbResult.session_status || 'new'\n};\n\nconst vacancies = Array.isArray(dbResult.vacancies) ? dbResult.vacancies : [];\nconst chatHistory = Array.isArray(dbResult.chat_history) ? dbResult.chat_history : [];\n\n// Собираем известные данные из истории\nlet knownData = {\n  first_name: null,\n  last_name: null,\n  citizenship: null,\n  age: null,\n  experience: null,\n  documents_status: null,\n  has_amina_app: null,\n  phone: null,\n  position_interest: null,\n  russian_level: null\n};\n\n// Объединяем extracted_data из всей истории\nchatHistory.slice().reverse().forEach(h => {\n  if (h.extracted_data) {\n    try {\n      const data = typeof h.extracted_data === 'string' \n        ? JSON.parse(h.extracted_data) \n        : h.extracted_data;\n      Object.keys(data).forEach(key => {\n        if (data[key] && data[key] !== 'unknown' && data[key] !== null && data[key] !== '') {\n          knownData[key] = data[key];\n        }\n      });\n    } catch (e) {}\n  }\n});\n\nconst isNewUser = chatHistory.length === 0;\n\n// Форматируем вакансии для промпта\nconst vacanciesText = vacancies.length > 0\n  ? vacancies.map(v => \n      `📌 ${v.position_name}\\n💰 Зарплата: ${v.salary_min || '?'}-${v.salary_max || '?'} руб.\\n📋 ${v.benefits || 'Условия уточняйте'}`\n    ).join('\\n\\n')\n  : 'Вакансии загружаются...';\n\n// Форматируем историю для контекста AI\nconst chatHistoryText = chatHistory.length > 0\n  ? 'ПОСЛЕДНИЕ СООБЩЕНИЯ (от новых к старым):\\n' + chatHistory.slice(0, 10).map((h, i) => \n      `${i + 1}. Кандидат: \"${h.user_message}\"\\n   Бот: \"${(h.bot_response || '').substring(0, 100)}${h.bot_response?.length > 100 ? '...' : ''}\"`\n    ).join('\\n\\n')\n  : 'История диалога пуста (новый пользователь)';\n\nreturn {\n  user_id: trigger.user_id,\n  user_message: trigger.text,\n  chat_id: trigger.chat_id,\n  first_name: trigger.first_name || knownData.first_name || '',\n  username: trigger.username,\n  message_id: trigger.message_id,\n  session_id: session.session_id,\n  language: session.language || 'ru',\n  session_status: session.status || 'new',\n  is_new_user: isNewUser,\n  vacancies: vacancies,\n  vacancies_text: vacanciesText,\n  known_data: knownData,\n  chat_history: chatHistory.slice(0, 10),\n  chat_history_text: chatHistoryText,\n  timestamp: trigger.timestamp,\n  is_callback: trigger.is_callback,\n  callback_data: trigger.callback_data,\n  db_available: true\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 0],
+      "position": [660, -50],
       "id": "merge-context",
       "name": "Merge Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// STATELESS FALLBACK: Работа без БД (v4.0)\n// ============================================================\n\nconst trigger = $('Extract Input').first().json;\n\nconsole.log('⚠️ SESSION MANAGER: Database unavailable, using stateless mode');\n\n// Минимальный контекст без БД\nreturn {\n  user_id: trigger.user_id,\n  user_message: trigger.text,\n  chat_id: trigger.chat_id,\n  first_name: trigger.first_name || '',\n  username: trigger.username,\n  message_id: trigger.message_id,\n  session_id: null,\n  language: 'ru',\n  session_status: 'stateless',\n  is_new_user: true,\n  vacancies: [],\n  vacancies_text: 'Информация о вакансиях временно недоступна. Пожалуйста, попробуйте позже.',\n  known_data: {\n    first_name: trigger.first_name || null,\n    last_name: null,\n    citizenship: null,\n    age: null,\n    experience: null,\n    documents_status: null,\n    has_amina_app: null,\n    phone: null,\n    position_interest: null,\n    russian_level: null\n  },\n  chat_history: [],\n  chat_history_text: 'История диалога недоступна (режим без БД)',\n  timestamp: trigger.timestamp,\n  is_callback: trigger.is_callback,\n  callback_data: trigger.callback_data,\n  db_available: false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 150],
+      "id": "stateless-fallback",
+      "name": "Stateless Fallback"
     },
     {
       "parameters": {
@@ -123,7 +75,7 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1540, 0],
+      "position": [880, 0],
       "id": "call-router",
       "name": "Call Router",
       "notes": "Вызывает workflow 03_router"
@@ -134,21 +86,18 @@
       "main": [[{"node": "Extract Input", "type": "main", "index": 0}]]
     },
     "Extract Input": {
-      "main": [[{"node": "Load Session", "type": "main", "index": 0}]]
+      "main": [[{"node": "Load All Data (Optimized)", "type": "main", "index": 0}]]
     },
-    "Load Session": {
-      "main": [[{"node": "Upsert Session", "type": "main", "index": 0}]]
-    },
-    "Upsert Session": {
-      "main": [[{"node": "Load Vacancies", "type": "main", "index": 0}]]
-    },
-    "Load Vacancies": {
-      "main": [[{"node": "Load Chat History", "type": "main", "index": 0}]]
-    },
-    "Load Chat History": {
-      "main": [[{"node": "Merge Context", "type": "main", "index": 0}]]
+    "Load All Data (Optimized)": {
+      "main": [
+        [{"node": "Merge Context", "type": "main", "index": 0}],
+        [{"node": "Stateless Fallback", "type": "main", "index": 0}]
+      ]
     },
     "Merge Context": {
+      "main": [[{"node": "Call Router", "type": "main", "index": 0}]]
+    },
+    "Stateless Fallback": {
       "main": [[{"node": "Call Router", "type": "main", "index": 0}]]
     }
   },

@@ -11,13 +11,48 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================================\n// SCORING ENGINE: Multi-Factor Score Calculation (v3.0)\n// ============================================================\n\nconst data = $json;\nconst extracted = data.extracted_data || {};\n\nlet score = 0;\nconst breakdown = {\n  documents: 0,\n  experience: 0,\n  age: 0,\n  communication: 0\n};\n\n// 1. Documents Score (0-25)\nconst docStatus = String(extracted.documents_status || '').toLowerCase();\nif (docStatus === 'yes' || docStatus === 'complete' || docStatus === 'да' || docStatus === 'есть') {\n  breakdown.documents = 25;\n} else if (docStatus === 'partial' || docStatus === 'частично') {\n  breakdown.documents = 15;\n} else if (docStatus === 'processing' || docStatus === 'оформляю' || docStatus === 'в процессе') {\n  breakdown.documents = 10;\n} else if (docStatus === 'no' || docStatus === 'нет' || docStatus === 'missing') {\n  breakdown.documents = 0;\n} else {\n  breakdown.documents = 5;\n}\nscore += breakdown.documents;\n\n// 2. Experience Score (0-25)\nconst expText = String(extracted.experience || '').toLowerCase();\nconst expMatch = expText.match(/(\\d+)/);\nconst expYears = expMatch ? parseInt(expMatch[1]) : 0;\n\nif (expYears >= 5) breakdown.experience = 25;\nelse if (expYears >= 3) breakdown.experience = 20;\nelse if (expYears >= 1) breakdown.experience = 15;\nelse if (expText.includes('есть') || expText.includes('работал')) breakdown.experience = 12;\nelse breakdown.experience = 5;\nscore += breakdown.experience;\n\n// 3. Age Score (0-25)\nconst age = parseInt(extracted.age) || 0;\nif (age > 0 && age <= 35) breakdown.age = 25;\nelse if (age > 35 && age <= 45) breakdown.age = 20;\nelse if (age > 45 && age <= 50) breakdown.age = 15;\nelse if (age > 50 && age <= 55) breakdown.age = 10;\nelse if (age > 55) breakdown.age = 5;\nelse breakdown.age = 10;\nscore += breakdown.age;\n\n// 4. Communication Score (0-25)\nbreakdown.communication = 20;\nscore += breakdown.communication;\n\n// Determine recommendation\nlet recommendation = 'manual_review';\nlet rejectionReason = null;\n\nif (age > 55) {\n  recommendation = 'auto_reject';\n  rejectionReason = 'age';\n} else if (docStatus === 'no' || docStatus === 'нет' || docStatus === 'missing') {\n  recommendation = 'auto_reject';\n  rejectionReason = 'documents';\n} else if (docStatus === 'processing' || docStatus === 'оформляю') {\n  recommendation = 'documents_pending';\n} else if (score >= 70) {\n  recommendation = 'auto_approve';\n} else if (score >= 50) {\n  recommendation = 'manual_review';\n} else {\n  recommendation = 'auto_reject';\n  rejectionReason = 'low_score';\n}\n\nreturn {\n  ...data,\n  final_score: score,\n  score_breakdown: breakdown,\n  recommendation: recommendation,\n  rejection_reason: rejectionReason\n};"
+        "jsCode": "// ============================================================\n// SCORING ENGINE: Data Validation (v4.0)\n// Проверяем что данные существуют перед скорингом\n// ============================================================\n\nconst data = $json;\nconst extracted = data.extracted_data || {};\n\n// Валидация: проверяем наличие минимальных данных\nconst hasName = extracted.first_name && extracted.first_name !== null;\nconst hasAge = extracted.age && !isNaN(parseInt(extracted.age));\nconst hasPhone = extracted.phone && extracted.phone !== null;\n\nconst isValidForScoring = hasName && hasAge && hasPhone;\n\nreturn {\n  ...data,\n  is_valid_for_scoring: isValidForScoring,\n  validation_errors: {\n    missing_name: !hasName,\n    missing_age: !hasAge,\n    missing_phone: !hasPhone\n  }\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [220, 0],
+      "id": "validate-data",
+      "name": "Validate Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3},
+          "conditions": [{"leftValue": "={{ $json.is_valid_for_scoring }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [440, 0],
+      "id": "if-valid",
+      "name": "IF Valid Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// SCORING ENGINE: Multi-Factor Score (v4.0 - FIXED)\n// ИСПРАВЛЕНО: возраст строго < 50 лет (согласно ТЗ)\n// ДОБАВЛЕНО: поддержка Амина, уровень русского\n// ============================================================\n\nconst data = $json;\nconst extracted = data.extracted_data || {};\n\nlet score = 0;\nconst breakdown = {\n  documents: 0,\n  experience: 0,\n  age: 0,\n  communication: 0,\n  russian_level: 0\n};\n\n// ============================================================\n// 1. DOCUMENTS SCORE (0-25)\n// Учитываем приложение Амина как альтернативу документам\n// ============================================================\nconst docStatus = String(extracted.documents_status || '').toLowerCase();\nconst hasAminaApp = extracted.has_amina_app === true;\n\nif (hasAminaApp) {\n  // Амина заменяет все документы\n  breakdown.documents = 25;\n} else if (docStatus === 'yes' || docStatus === 'complete' || docStatus === 'да' || docStatus === 'есть') {\n  breakdown.documents = 25;\n} else if (docStatus === 'partial' || docStatus === 'частично') {\n  breakdown.documents = 15;\n} else if (docStatus === 'processing' || docStatus === 'оформляю' || docStatus === 'в процессе') {\n  breakdown.documents = 10;\n} else if (docStatus === 'no' || docStatus === 'нет' || docStatus === 'missing') {\n  breakdown.documents = 0;\n} else {\n  breakdown.documents = 5;\n}\nscore += breakdown.documents;\n\n// ============================================================\n// 2. EXPERIENCE SCORE (0-25)\n// ============================================================\nconst expText = String(extracted.experience || '').toLowerCase();\nconst expMatch = expText.match(/(\\d+)/);\nconst expYears = expMatch ? parseInt(expMatch[1]) : 0;\n\nif (expYears >= 5) breakdown.experience = 25;\nelse if (expYears >= 3) breakdown.experience = 20;\nelse if (expYears >= 1) breakdown.experience = 15;\nelse if (expText.includes('есть') || expText.includes('работал') || expText.length > 10) breakdown.experience = 12;\nelse breakdown.experience = 5;\nscore += breakdown.experience;\n\n// ============================================================\n// 3. AGE SCORE (0-25)\n// КРИТИЧНО: Возраст СТРОГО до 50 лет (согласно ТЗ)\n// ============================================================\nconst age = parseInt(extracted.age) || 0;\nif (age > 0 && age <= 30) breakdown.age = 25;\nelse if (age > 30 && age <= 40) breakdown.age = 20;\nelse if (age > 40 && age <= 45) breakdown.age = 15;\nelse if (age > 45 && age < 50) breakdown.age = 10; // До 50, не включая\nelse if (age >= 50) breakdown.age = 0; // СТРОГИЙ ОТКАЗ при >= 50\nelse breakdown.age = 10;\nscore += breakdown.age;\n\n// ============================================================\n// 4. RUSSIAN LEVEL SCORE (0-15)\n// ============================================================\nconst russianLevel = String(extracted.russian_level || 'unknown').toLowerCase();\nif (russianLevel === 'хороший' || russianLevel === 'отличный' || russianLevel === 'свободный' || russianLevel === 'good') {\n  breakdown.russian_level = 15;\n} else if (russianLevel === 'базовый' || russianLevel === 'средний' || russianLevel === 'basic') {\n  breakdown.russian_level = 10;\n} else if (russianLevel === 'слабый' || russianLevel === 'начальный' || russianLevel === 'poor') {\n  breakdown.russian_level = 5;\n} else {\n  // Не указан - даём базовый балл\n  breakdown.russian_level = 8;\n}\nscore += breakdown.russian_level;\n\n// ============================================================\n// 5. COMMUNICATION SCORE (0-10)\n// Снижен с 25 до 10 из-за добавления russian_level\n// ============================================================\nbreakdown.communication = 10;\nscore += breakdown.communication;\n\n// ============================================================\n// DETERMINE RECOMMENDATION\n// ============================================================\nlet recommendation = 'manual_review';\nlet rejectionReason = null;\nlet askAboutDocuments = false;\n\n// КРИТИЧНО: возраст >= 50 = автоматический отказ\nif (age >= 50) {\n  recommendation = 'auto_reject';\n  rejectionReason = 'age';\n}\n// Нет документов И нет Амины\nelse if (!hasAminaApp && (docStatus === 'no' || docStatus === 'нет' || docStatus === 'missing')) {\n  // ВАЖНО: Спрашиваем, оформляет ли документы, прежде чем отказать\n  askAboutDocuments = true;\n  recommendation = 'ask_documents';\n  rejectionReason = 'documents';\n}\n// Оформляет документы\nelse if (docStatus === 'processing' || docStatus === 'оформляю') {\n  recommendation = 'documents_pending';\n}\n// Высокий балл\nelse if (score >= 65) {\n  recommendation = 'auto_approve';\n}\n// Средний балл\nelse if (score >= 45) {\n  recommendation = 'manual_review';\n}\n// Низкий балл\nelse {\n  recommendation = 'auto_reject';\n  rejectionReason = 'low_score';\n}\n\nreturn {\n  ...data,\n  final_score: score,\n  score_breakdown: breakdown,\n  recommendation: recommendation,\n  rejection_reason: rejectionReason,\n  ask_about_documents: askAboutDocuments,\n  has_amina_app: hasAminaApp\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, -100],
       "id": "calculate-score",
       "name": "Calculate Multi-Factor Score"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// SCORING ENGINE: Handle Invalid Data (v4.0)\n// Возвращаем на интервью для сбора недостающих данных\n// ============================================================\n\nconst data = $json;\nconst errors = data.validation_errors || {};\n\nconsole.log('⚠️ Scoring: Invalid data, returning to interview');\n\nlet missingFields = [];\nif (errors.missing_name) missingFields.push('имя');\nif (errors.missing_age) missingFields.push('возраст');\nif (errors.missing_phone) missingFields.push('телефон');\n\nreturn {\n  ...data,\n  recommendation: 'return_to_interview',\n  missing_fields: missingFields,\n  final_message: `Для продолжения, пожалуйста, укажите: ${missingFields.join(', ')}. 📝`\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 150],
+      "id": "handle-invalid",
+      "name": "Handle Invalid Data"
     },
     {
       "parameters": {
@@ -58,6 +93,15 @@
               },
               "renameOutput": true,
               "outputKey": "Documents Pending"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.recommendation }}", "rightValue": "ask_documents", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Ask Documents"
             }
           ]
         },
@@ -65,34 +109,35 @@
       },
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
-      "position": [440, 0],
+      "position": [880, -100],
       "id": "route-by-score",
       "name": "Route by Score"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO approved_candidates (\n  telegram_user_id, first_name, last_name, phone, age, citizenship,\n  experience, position_name, score, documents_status, created_at\n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())\nON CONFLICT (telegram_user_id) DO UPDATE SET\n  first_name = EXCLUDED.first_name,\n  phone = EXCLUDED.phone,\n  score = EXCLUDED.score,\n  created_at = NOW()\nRETURNING id",
+        "query": "INSERT INTO approved_candidates (\n  telegram_user_id, first_name, last_name, phone, age, citizenship,\n  experience, position_name, score, documents_status, has_amina_app, created_at\n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())\nON CONFLICT (telegram_user_id) DO UPDATE SET\n  first_name = EXCLUDED.first_name,\n  phone = EXCLUDED.phone,\n  score = EXCLUDED.score,\n  has_amina_app = EXCLUDED.has_amina_app,\n  created_at = NOW()\nRETURNING id",
         "options": {
-          "queryReplacement": "={{ [$json.user_id, $json.extracted_data.first_name, $json.extracted_data.last_name, $json.extracted_data.phone, $json.extracted_data.age, $json.extracted_data.citizenship, $json.extracted_data.experience, $json.extracted_data.position_interest, $json.final_score, $json.extracted_data.documents_status] }}"
+          "queryReplacement": "={{ [$json.user_id, $json.extracted_data.first_name, $json.extracted_data.last_name, $json.extracted_data.phone, $json.extracted_data.age, $json.extracted_data.citizenship, $json.extracted_data.experience, $json.extracted_data.position_interest, $json.final_score, $json.extracted_data.documents_status, $json.has_amina_app || false] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [660, -200],
+      "position": [1100, -300],
       "id": "save-approved",
       "name": "Save Approved Candidate",
-      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}}
+      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}},
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
         "chatId": "-1003410305192",
-        "text": "=✅ <b>КАНДИДАТ ОДОБРЕН</b>\n\n👤 {{ $json.extracted_data.first_name || '' }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n🎂 {{ $json.extracted_data.age || '?' }} лет\n🌍 {{ $json.extracted_data.citizenship || '?' }}\n💼 Опыт: {{ $json.extracted_data.experience || '?' }}\n\n⭐ Score: {{ $json.final_score }}/100\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n• Коммуникация: {{ $json.score_breakdown.communication }}/25\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать кандидату</a>",
+        "text": "=✅ <b>КАНДИДАТ ОДОБРЕН</b>\n\n👤 {{ $json.extracted_data.first_name || '' }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n🎂 {{ $json.extracted_data.age || '?' }} лет\n🌍 {{ $json.extracted_data.citizenship || '?' }}\n💼 Опыт: {{ $json.extracted_data.experience || '?' }}\n📱 Амина: {{ $json.has_amina_app ? 'Да' : 'Нет' }}\n🗣 Русский: {{ $json.extracted_data.russian_level || '?' }}\n\n⭐ Score: {{ $json.final_score }}/100\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n• Русский: {{ $json.score_breakdown.russian_level }}/15\n• Коммуникация: {{ $json.score_breakdown.communication }}/10\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать кандидату</a>",
         "additionalFields": {"appendAttribution": false, "parse_mode": "HTML"}
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [880, -200],
+      "position": [1320, -300],
       "id": "notify-hr-approved",
       "name": "Notify HR - Approved",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -107,20 +152,21 @@
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [660, -50],
+      "position": [1100, -150],
       "id": "save-rejected",
       "name": "Save Rejected Candidate",
-      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}}
+      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}},
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
         "chatId": "-1003410305192",
-        "text": "=❌ <b>КАНДИДАТ ОТКЛОНЁН</b>\n\n👤 {{ $json.extracted_data.first_name || 'Неизвестно' }}\n❌ Причина: {{ $json.rejection_reason === 'age' ? 'Возраст > 55' : $json.rejection_reason === 'documents' ? 'Нет документов' : 'Низкий балл' }}\n⭐ Score: {{ $json.final_score }}/100\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Профиль</a>",
+        "text": "=❌ <b>КАНДИДАТ ОТКЛОНЁН</b>\n\n👤 {{ $json.extracted_data.first_name || 'Неизвестно' }}\n❌ Причина: {{ $json.rejection_reason === 'age' ? 'Возраст >= 50 лет' : $json.rejection_reason === 'documents' ? 'Нет документов' : 'Низкий балл' }}\n⭐ Score: {{ $json.final_score }}/100\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Профиль</a>",
         "additionalFields": {"appendAttribution": false, "parse_mode": "HTML"}
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [880, -50],
+      "position": [1320, -150],
       "id": "notify-hr-rejected",
       "name": "Notify HR - Rejected",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -128,12 +174,12 @@
     {
       "parameters": {
         "chatId": "-1003410305192",
-        "text": "=🔍 <b>ТРЕБУЕТСЯ РЕШЕНИЕ HR</b>\n\n👤 {{ $json.extracted_data.first_name || '' }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n⭐ Score: {{ $json.final_score }}/100\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n• Коммуникация: {{ $json.score_breakdown.communication }}/25\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать</a>",
+        "text": "=🔍 <b>ТРЕБУЕТСЯ РЕШЕНИЕ HR</b>\n\n👤 {{ $json.extracted_data.first_name || '' }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n📱 Амина: {{ $json.has_amina_app ? 'Да' : 'Нет' }}\n⭐ Score: {{ $json.final_score }}/100\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n• Русский: {{ $json.score_breakdown.russian_level }}/15\n• Коммуникация: {{ $json.score_breakdown.communication }}/10\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать</a>",
         "additionalFields": {"appendAttribution": false, "parse_mode": "HTML"}
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [660, 100],
+      "position": [1100, 0],
       "id": "notify-hr-review",
       "name": "Notify HR - Manual Review",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -146,9 +192,22 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [660, 250],
+      "position": [1100, 150],
       "id": "notify-hr-pending",
       "name": "Notify HR - Documents Pending",
+      "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
+        "text": "📝 У вас пока нет документов. Скажите, вы планируете их оформить?\n\nВам подойдёт ОДИН из вариантов:\n1️⃣ Приложение \"Амина\" — это быстро и удобно!\n2️⃣ Полный пакет: паспорт + миграционная карта + регистрация\n\nВы оформляете документы? 🤔",
+        "additionalFields": {"appendAttribution": false, "parse_mode": "HTML"}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 300],
+      "id": "ask-about-documents",
+      "name": "Ask About Documents",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
     },
     {
@@ -159,7 +218,7 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [1100, -200],
+      "position": [1540, -300],
       "id": "notify-candidate-approved",
       "name": "Notify Candidate - Approved",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -172,7 +231,7 @@
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [1100, -50],
+      "position": [1540, -150],
       "id": "notify-candidate-rejected",
       "name": "Notify Candidate - Rejected",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -180,12 +239,12 @@
     {
       "parameters": {
         "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
-        "text": "📝 Спасибо за информацию!\n\nКогда ваши документы будут готовы, напишите нам — мы с удовольствием продолжим! 🤝",
+        "text": "📝 Спасибо за информацию!\n\nКогда ваши документы будут готовы, напишите нам — мы с удовольствием продолжим! 🤝\n\n💡 Совет: Приложение \"Амина\" позволяет работать легально без бумажных документов!",
         "additionalFields": {"appendAttribution": false, "parse_mode": "HTML"}
       },
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [880, 250],
+      "position": [1320, 150],
       "id": "notify-candidate-pending",
       "name": "Notify Candidate - Pending",
       "credentials": {"telegramApi": {"id": "cS1RormMvPe41m7M", "name": "Zest"}}
@@ -198,15 +257,39 @@
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [1320, 0],
+      "position": [1760, 0],
       "id": "update-session-status",
       "name": "Update Session Status",
-      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}}
+      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}},
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE candidate_sessions SET status = 'awaiting_documents' WHERE telegram_user_id = $1",
+        "options": {"queryReplacement": "={{ [$json.user_id] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1320, 300],
+      "id": "update-session-awaiting",
+      "name": "Update Session - Awaiting Docs",
+      "credentials": {"postgres": {"id": "0AYoJYr8BGzKVyG6", "name": "Postgres account"}},
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
-      "main": [[{"node": "Calculate Multi-Factor Score", "type": "main", "index": 0}]]
+      "main": [[{"node": "Validate Data", "type": "main", "index": 0}]]
+    },
+    "Validate Data": {
+      "main": [[{"node": "IF Valid Data", "type": "main", "index": 0}]]
+    },
+    "IF Valid Data": {
+      "main": [
+        [{"node": "Calculate Multi-Factor Score", "type": "main", "index": 0}],
+        [{"node": "Handle Invalid Data", "type": "main", "index": 0}]
+      ]
     },
     "Calculate Multi-Factor Score": {
       "main": [[{"node": "Route by Score", "type": "main", "index": 0}]]
@@ -216,7 +299,8 @@
         [{"node": "Save Approved Candidate", "type": "main", "index": 0}],
         [{"node": "Save Rejected Candidate", "type": "main", "index": 0}],
         [{"node": "Notify HR - Manual Review", "type": "main", "index": 0}],
-        [{"node": "Notify HR - Documents Pending", "type": "main", "index": 0}]
+        [{"node": "Notify HR - Documents Pending", "type": "main", "index": 0}],
+        [{"node": "Ask About Documents", "type": "main", "index": 0}]
       ]
     },
     "Save Approved Candidate": {
@@ -231,8 +315,14 @@
     "Notify HR - Rejected": {
       "main": [[{"node": "Notify Candidate - Rejected", "type": "main", "index": 0}]]
     },
+    "Notify HR - Manual Review": {
+      "main": [[{"node": "Update Session Status", "type": "main", "index": 0}]]
+    },
     "Notify HR - Documents Pending": {
       "main": [[{"node": "Notify Candidate - Pending", "type": "main", "index": 0}]]
+    },
+    "Ask About Documents": {
+      "main": [[{"node": "Update Session - Awaiting Docs", "type": "main", "index": 0}]]
     },
     "Notify Candidate - Approved": {
       "main": [[{"node": "Update Session Status", "type": "main", "index": 0}]]
@@ -247,7 +337,7 @@
   "pinData": {},
   "settings": {"executionOrder": "v1"},
   "staticData": null,
-  "tags": [{"name": "HR Bot"}, {"name": "Scoring"}],
+  "tags": [{"name": "HR Bot"}, {"name": "Scoring"}, {"name": "Fixed"}],
   "triggerCount": 0,
   "meta": {"instanceId": "hr-bot-v2"}
 }

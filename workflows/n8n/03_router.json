@@ -11,38 +11,74 @@
     },
     {
       "parameters": {
-        "jsCode": "// Подготовка данных для Router Agent\nconst context = $json;\n\nreturn {\n  user_id: context.user_id,\n  user_message: context.user_message,\n  chat_id: context.chat_id,\n  first_name: context.first_name,\n  username: context.username,\n  language: context.language,\n  session_status: context.session_status,\n  is_new_user: context.is_new_user,\n  vacancies: context.vacancies,\n  vacancies_text: context.vacancies_text,\n  known_data: context.known_data,\n  chat_history: context.chat_history,\n  chat_history_text: context.chat_history_text,\n  timestamp: context.timestamp,\n  is_callback: context.is_callback,\n  callback_data: context.callback_data,\n  session_id: context.session_id\n};"
+        "jsCode": "// ============================================================\n// ROUTER v4.0: Regex Pre-Routing (экономит ~40% API вызовов)\n// ============================================================\n\nconst context = $json;\nconst text = (context.user_message || '').toLowerCase().trim();\nconst callback = context.callback_data || '';\n\n// REGEX RULES (НЕ требуют LLM)\nlet fastRoute = null;\n\n// 1. Callback выбора языка\nif (callback.startsWith('lang_')) {\n  fastRoute = 'LANGUAGE';\n}\n// 2. Команда /start (новый пользователь)\nelse if (text === '/start' || text === 'start') {\n  fastRoute = context.is_new_user ? 'GREETING' : 'INTERVIEW';\n}\n// 3. Команда /cancel или /restart - сброс анкеты\nelse if (text === '/cancel' || text === '/restart' || text === 'отмена' || text === 'заново') {\n  fastRoute = 'CANCEL';\n}\n// 4. Команда /help - эскалация\nelse if (text === '/help' || text === 'помощь' || text === 'помоги') {\n  fastRoute = 'ESCALATION';\n}\n// 5. Явный выбор языка (без истории)\nelse if (!context.chat_history?.length && \n         (text.includes('русский') || text.includes('кыргыз') || \n          text.includes('узбек') || text.includes('тоҷик'))) {\n  fastRoute = 'LANGUAGE';\n}\n// 6. Простые приветствия (новый пользователь)\nelse if (context.is_new_user && !context.chat_history?.length &&\n         /^(привет|здравствуй|салам|hi|hello|хай|ассалом)/.test(text)) {\n  fastRoute = 'GREETING';\n}\n\nreturn {\n  ...context,\n  fast_route: fastRoute,\n  needs_llm: fastRoute === null\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [220, 0],
-      "id": "prepare-for-router",
-      "name": "Prepare for Router"
+      "id": "regex-pre-router",
+      "name": "Regex Pre-Router"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_llm }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "needs-llm-check"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "if-needs-llm",
+      "name": "IF Needs LLM"
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Сообщение пользователя: {{ $json.user_message }}\n\nЭто новый пользователь: {{ $json.is_new_user }}\nТекущий язык: {{ $json.language }}\nCallback data: {{ $json.callback_data }}\n\nИСТОРИЯ ДИАЛОГА:\n{{ $json.chat_history_text }}\n\nИЗВЕСТНЫЕ ДАННЫЕ О КАНДИДАТЕ:\n{{ JSON.stringify($json.known_data) }}",
+        "text": "=Сообщение пользователя: {{ $json.user_message }}\n\nЭто новый пользователь: {{ $json.is_new_user }}\nТекущий язык: {{ $json.language }}\n\nИСТОРИЯ ДИАЛОГА:\n{{ $json.chat_history_text }}\n\nИЗВЕСТНЫЕ ДАННЫЕ О КАНДИДАТЕ:\n{{ JSON.stringify($json.known_data) }}",
         "options": {
-          "systemMessage": "Ты — классификатор сообщений для HR-бота BestHotel. Определи категорию сообщения.\n\nКАТЕГОРИИ:\n- GREETING: приветствия (привет, здравствуй, салам, hi, hello, /start)\n- LANGUAGE: выбор языка (русский, кыргызча, узбекча, тоҷикӣ) или callback lang_*\n- INTERVIEW: ответы на вопросы анкеты (имя, возраст, опыт, документы, телефон)\n- FAQ: вопросы о вакансии (зарплата, график, условия, где работать)\n- ESCALATION: просьба о помощи человека (менеджер, помощь, человек, не понимаю)\n\nПРАВИЛА МАРШРУТИЗАЦИИ:\n1. callback_data начинается с 'lang_' → LANGUAGE\n2. is_new_user = true И история пуста И приветствие → GREETING\n3. Упоминается язык И known_data.first_name пуст → LANGUAGE\n4. Вопрос о зарплате/графике/условиях → FAQ\n5. Просит менеджера/помощь → ESCALATION\n6. known_data.first_name заполнен ИЛИ история НЕ пуста → INTERVIEW\n7. Всё остальное → INTERVIEW (по умолчанию)\n\nОтвечай ТОЛЬКО JSON без markdown:\n{\"category\": \"INTERVIEW\", \"confidence\": 0.95, \"detected_language\": \"ru\"}"
+          "systemMessage": "Ты — классификатор сообщений для HR-бота. Определи категорию.\n\nКАТЕГОРИИ:\n- INTERVIEW: ответы на вопросы анкеты (имя, возраст, опыт, документы, телефон)\n- FAQ: вопросы о вакансии (зарплата, график, условия, где работать)\n- ESCALATION: просьба о помощи человека (менеджер, не понимаю)\n\nПРАВИЛА:\n1. Вопрос о зарплате/графике/условиях → FAQ\n2. Просит менеджера/помощь → ESCALATION\n3. Всё остальное → INTERVIEW\n\nОтвечай ТОЛЬКО JSON: {\"category\": \"INTERVIEW\", \"confidence\": 0.95}",
+          "timeout": 10000
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [440, 0],
+      "position": [660, -100],
       "id": "router-agent",
-      "name": "Router Agent"
+      "name": "Router Agent (LLM)",
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
         "options": {
-          "maxTokens": 150,
-          "temperature": 0.2
+          "maxTokens": 100,
+          "temperature": 0.1,
+          "timeout": 10000
         }
       },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [440, 200],
+      "position": [660, 100],
       "id": "deepseek-router",
       "name": "DeepSeek Router",
       "credentials": {
@@ -54,13 +90,33 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================================\n// ROUTER: Parse Response + Override Rules (v3.0)\n// ============================================================\n\nconst routerResponse = $json.text || $json.output || $json.content || '{}';\nconst context = $('Prepare for Router').first().json;\n\nlet parsed = { \n  category: 'INTERVIEW', \n  confidence: 0.5, \n  detected_language: 'ru' \n};\n\n// Парсинг ответа LLM\ntry {\n  const cleanJson = String(routerResponse)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Router parse error:', e.message);\n  parsed.category = 'INTERVIEW';\n}\n\n// ======= ЖЁСТКИЕ ПРАВИЛА OVERRIDE (ПРИОРИТЕТ) =======\n\n// ПРИОРИТЕТ 0 (ВЫСШИЙ): Callback для выбора языка\nif (context.callback_data && context.callback_data.startsWith('lang_')) {\n  parsed.category = 'LANGUAGE';\n  parsed.confidence = 1.0;\n}\n\n// ПРИОРИТЕТ 1: История НЕ пуста → НИКОГДА НЕ GREETING\nif (context.chat_history && context.chat_history.length > 0) {\n  if (parsed.category === 'GREETING') {\n    const text = (context.user_message || '').toLowerCase();\n    // Может это FAQ?\n    if (text.includes('зарплат') || text.includes('график') || \n        text.includes('условия') || text.includes('сколько') ||\n        text.includes('вакансии') || text.includes('работа')) {\n      parsed.category = 'FAQ';\n    } else {\n      parsed.category = 'INTERVIEW';\n    }\n  }\n}\n\n// ПРИОРИТЕТ 2: Есть имя в known_data → INTERVIEW (кроме FAQ/ESCALATION)\nif (context.known_data && context.known_data.first_name) {\n  if (parsed.category !== 'FAQ' && \n      parsed.category !== 'ESCALATION' && \n      parsed.category !== 'LANGUAGE') {\n    parsed.category = 'INTERVIEW';\n  }\n}\n\n// ПРИОРИТЕТ 3: Новый пользователь + приветствие\nif (context.is_new_user && \n    (!context.chat_history || context.chat_history.length === 0)) {\n  const text = (context.user_message || '').toLowerCase();\n  if (text.includes('привет') || text.includes('здравст') || \n      text.includes('салам') || text.includes('hi') || \n      text.includes('hello') || text === '/start' || text === 'start') {\n    parsed.category = 'GREETING';\n    parsed.confidence = 1.0;\n  }\n}\n\n// Логирование для отладки\nconsole.log('🔍 ROUTER:', {\n  message: context.user_message?.substring(0, 30),\n  is_new_user: context.is_new_user,\n  history_length: context.chat_history?.length || 0,\n  has_name: !!context.known_data?.first_name,\n  callback: context.callback_data,\n  final_category: parsed.category\n});\n\nreturn {\n  ...context,\n  route_category: parsed.category,\n  route_confidence: parsed.confidence || 0.8,\n  detected_language: parsed.detected_language || context.language\n};"
+        "jsCode": "// ============================================================\n// Parse LLM Response (v4.0)\n// ============================================================\n\nconst routerResponse = $json.text || $json.output || $json.content || '{}';\nconst context = $('Regex Pre-Router').first().json;\n\nlet parsed = { category: 'INTERVIEW', confidence: 0.5 };\n\ntry {\n  const cleanJson = String(routerResponse)\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*?\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Router parse error, defaulting to INTERVIEW:', e.message);\n}\n\n// Override rules\nif (context.chat_history?.length > 0 && parsed.category === 'GREETING') {\n  parsed.category = 'INTERVIEW';\n}\n\nif (context.known_data?.first_name && \n    parsed.category !== 'FAQ' && \n    parsed.category !== 'ESCALATION') {\n  parsed.category = 'INTERVIEW';\n}\n\nreturn {\n  ...context,\n  route_category: parsed.category,\n  route_confidence: parsed.confidence || 0.8\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 0],
-      "id": "parse-router-response",
-      "name": "Parse Router Response"
+      "position": [880, -150],
+      "id": "parse-llm-response",
+      "name": "Parse LLM Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LLM Error Fallback - default to INTERVIEW\nconst context = $('Regex Pre-Router').first().json;\n\nconsole.log('⚠️ ROUTER: LLM failed, defaulting to INTERVIEW');\n\nreturn {\n  ...context,\n  route_category: 'INTERVIEW',\n  route_confidence: 0.5,\n  llm_failed: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "id": "llm-error-fallback",
+      "name": "LLM Error Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fast Route - уже определено regex\nconst context = $json;\n\nreturn {\n  ...context,\n  route_category: context.fast_route,\n  route_confidence: 1.0\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 150],
+      "id": "fast-route-result",
+      "name": "Fast Route Result"
     },
     {
       "parameters": {
@@ -68,20 +124,8 @@
           "values": [
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 3
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.route_category }}",
-                    "rightValue": "GREETING",
-                    "operator": {"type": "string", "operation": "equals"},
-                    "id": "greeting-check"
-                  }
-                ],
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "GREETING", "operator": {"type": "string", "operation": "equals"}, "id": "greeting-check"}],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -89,20 +133,8 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 3
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.route_category }}",
-                    "rightValue": "INTERVIEW",
-                    "operator": {"type": "string", "operation": "equals"},
-                    "id": "interview-check"
-                  }
-                ],
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "INTERVIEW", "operator": {"type": "string", "operation": "equals"}, "id": "interview-check"}],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -110,20 +142,8 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 3
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.route_category }}",
-                    "rightValue": "FAQ",
-                    "operator": {"type": "string", "operation": "equals"},
-                    "id": "faq-check"
-                  }
-                ],
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "FAQ", "operator": {"type": "string", "operation": "equals"}, "id": "faq-check"}],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -131,20 +151,8 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 3
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.route_category }}",
-                    "rightValue": "ESCALATION",
-                    "operator": {"type": "string", "operation": "equals"},
-                    "id": "escalation-check"
-                  }
-                ],
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "ESCALATION", "operator": {"type": "string", "operation": "equals"}, "id": "escalation-check"}],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -152,34 +160,29 @@
             },
             {
               "conditions": {
-                "options": {
-                  "caseSensitive": true,
-                  "leftValue": "",
-                  "typeValidation": "strict",
-                  "version": 3
-                },
-                "conditions": [
-                  {
-                    "leftValue": "={{ $json.route_category }}",
-                    "rightValue": "LANGUAGE",
-                    "operator": {"type": "string", "operation": "equals"},
-                    "id": "language-check"
-                  }
-                ],
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "LANGUAGE", "operator": {"type": "string", "operation": "equals"}, "id": "language-check"}],
                 "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "Language"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3},
+                "conditions": [{"leftValue": "={{ $json.route_category }}", "rightValue": "CANCEL", "operator": {"type": "string", "operation": "equals"}, "id": "cancel-check"}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Cancel"
             }
           ]
         },
-        "options": {
-          "fallbackOutput": "extra"
-        }
+        "options": {"fallbackOutput": "extra"}
       },
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
-      "position": [880, 0],
+      "position": [1100, 0],
       "id": "route-by-category",
       "name": "Route by Category"
     },
@@ -190,7 +193,7 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, -200],
+      "position": [1320, -300],
       "id": "call-greeting",
       "name": "Call Greeting Agent",
       "notes": "04a_greeting_agent"
@@ -202,7 +205,7 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, -50],
+      "position": [1320, -150],
       "id": "call-interview",
       "name": "Call Interview Agent",
       "notes": "04b_interview_agent"
@@ -214,7 +217,7 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, 100],
+      "position": [1320, 0],
       "id": "call-faq",
       "name": "Call FAQ Agent",
       "notes": "04c_faq_agent"
@@ -226,7 +229,7 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, 250],
+      "position": [1320, 150],
       "id": "call-escalation",
       "name": "Call Escalation Handler",
       "notes": "04d_escalation_handler"
@@ -238,10 +241,20 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, 400],
+      "position": [1320, 300],
       "id": "call-language",
       "name": "Call Language Handler",
       "notes": "04e_language_handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// CANCEL HANDLER: Сброс анкеты\n// ============================================================\n\nconst context = $json;\n\nreturn {\n  ...context,\n  response_message: '🔄 Хорошо! Анкета сброшена.\\n\\nДавайте начнём заново. Выберите язык общения:',\n  final_message: '🔄 Хорошо! Анкета сброшена.\\n\\nДавайте начнём заново. Выберите язык общения:',\n  show_language_buttons: true,\n  extracted_data: {},\n  interview_complete: false,\n  needs_escalation: false,\n  reset_session: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 450],
+      "id": "handle-cancel",
+      "name": "Handle Cancel"
     },
     {
       "parameters": {
@@ -250,7 +263,19 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1100, 550],
+      "position": [1540, 450],
+      "id": "call-response-cancel",
+      "name": "Call Response Sender (Cancel)",
+      "notes": "05_response_sender"
+    },
+    {
+      "parameters": {
+        "workflowId": {"__rl": true, "mode": "list", "value": ""},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1320, 600],
       "id": "call-interview-fallback",
       "name": "Call Interview (Fallback)",
       "notes": "04b_interview_agent"
@@ -258,18 +283,33 @@
   ],
   "connections": {
     "Execute Workflow Trigger": {
-      "main": [[{"node": "Prepare for Router", "type": "main", "index": 0}]]
+      "main": [[{"node": "Regex Pre-Router", "type": "main", "index": 0}]]
     },
-    "Prepare for Router": {
-      "main": [[{"node": "Router Agent", "type": "main", "index": 0}]]
+    "Regex Pre-Router": {
+      "main": [[{"node": "IF Needs LLM", "type": "main", "index": 0}]]
+    },
+    "IF Needs LLM": {
+      "main": [
+        [{"node": "Router Agent (LLM)", "type": "main", "index": 0}],
+        [{"node": "Fast Route Result", "type": "main", "index": 0}]
+      ]
     },
     "DeepSeek Router": {
-      "ai_languageModel": [[{"node": "Router Agent", "type": "ai_languageModel", "index": 0}]]
+      "ai_languageModel": [[{"node": "Router Agent (LLM)", "type": "ai_languageModel", "index": 0}]]
     },
-    "Router Agent": {
-      "main": [[{"node": "Parse Router Response", "type": "main", "index": 0}]]
+    "Router Agent (LLM)": {
+      "main": [
+        [{"node": "Parse LLM Response", "type": "main", "index": 0}],
+        [{"node": "LLM Error Fallback", "type": "main", "index": 0}]
+      ]
     },
-    "Parse Router Response": {
+    "Parse LLM Response": {
+      "main": [[{"node": "Route by Category", "type": "main", "index": 0}]]
+    },
+    "LLM Error Fallback": {
+      "main": [[{"node": "Route by Category", "type": "main", "index": 0}]]
+    },
+    "Fast Route Result": {
       "main": [[{"node": "Route by Category", "type": "main", "index": 0}]]
     },
     "Route by Category": {
@@ -279,8 +319,12 @@
         [{"node": "Call FAQ Agent", "type": "main", "index": 0}],
         [{"node": "Call Escalation Handler", "type": "main", "index": 0}],
         [{"node": "Call Language Handler", "type": "main", "index": 0}],
+        [{"node": "Handle Cancel", "type": "main", "index": 0}],
         [{"node": "Call Interview (Fallback)", "type": "main", "index": 0}]
       ]
+    },
+    "Handle Cancel": {
+      "main": [[{"node": "Call Response Sender (Cancel)", "type": "main", "index": 0}]]
     }
   },
   "pinData": {},
