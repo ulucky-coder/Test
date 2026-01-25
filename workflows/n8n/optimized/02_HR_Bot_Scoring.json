@@ -1,0 +1,382 @@
+{
+  "name": "02_HR_Bot_Scoring",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "id": "workflow-trigger",
+      "name": "Execute Workflow Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// DATA VALIDATION: Проверка данных перед скорингом\n// ============================================================\n\nconst input = $json;\nconst data = input.extracted_data || input.known_data || {};\n\nconst hasName = data.first_name && data.first_name !== null;\nconst hasAge = data.age && !isNaN(parseInt(data.age));\nconst hasPhone = data.phone && data.phone !== null;\nconst hasCitizenship = data.citizenship && data.citizenship !== null;\n\nconst isValid = hasName && hasAge && hasPhone;\n\nreturn {\n  ...input,\n  extracted_data: data,\n  is_valid: isValid,\n  validation_errors: {\n    missing_name: !hasName,\n    missing_age: !hasAge,\n    missing_phone: !hasPhone,\n    missing_citizenship: !hasCitizenship\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "id": "validate-data",
+      "name": "Validate Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            { "leftValue": "={{ $json.is_valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [440, 300],
+      "id": "if-valid",
+      "name": "IF Valid Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// SCORING ENGINE: Multi-Factor Score (FIXED)\n// Возраст строго < 50 лет согласно ТЗ\n// ============================================================\n\nconst input = $json;\nconst data = input.extracted_data || {};\n\nlet score = 0;\nconst breakdown = {\n  documents: 0,\n  experience: 0,\n  age: 0,\n  russian_level: 0,\n  communication: 0\n};\n\n// 1. DOCUMENTS (0-25)\nconst docStatus = String(data.documents_status || '').toLowerCase();\nconst hasAmina = data.has_amina_app === true;\n\nif (hasAmina) {\n  breakdown.documents = 25;\n} else if (['yes', 'да', 'есть', 'complete'].includes(docStatus)) {\n  breakdown.documents = 25;\n} else if (['partial', 'частично'].includes(docStatus)) {\n  breakdown.documents = 15;\n} else if (['processing', 'оформляю', 'в процессе'].includes(docStatus)) {\n  breakdown.documents = 10;\n} else if (['no', 'нет', 'missing'].includes(docStatus)) {\n  breakdown.documents = 0;\n} else {\n  breakdown.documents = 5;\n}\nscore += breakdown.documents;\n\n// 2. EXPERIENCE (0-25)\nconst expText = String(data.experience || '').toLowerCase();\nconst expMatch = expText.match(/(\\d+)/);\nconst expYears = expMatch ? parseInt(expMatch[1]) : 0;\n\nif (expYears >= 5) breakdown.experience = 25;\nelse if (expYears >= 3) breakdown.experience = 20;\nelse if (expYears >= 1) breakdown.experience = 15;\nelse if (expText.includes('есть') || expText.includes('работал') || expText.length > 10) breakdown.experience = 12;\nelse breakdown.experience = 5;\nscore += breakdown.experience;\n\n// 3. AGE (0-25) — СТРОГО до 50 лет!\nconst age = parseInt(data.age) || 0;\nif (age > 0 && age <= 30) breakdown.age = 25;\nelse if (age > 30 && age <= 40) breakdown.age = 20;\nelse if (age > 40 && age <= 45) breakdown.age = 15;\nelse if (age > 45 && age < 50) breakdown.age = 10;\nelse if (age >= 50) breakdown.age = 0; // ОТКАЗ\nelse breakdown.age = 10;\nscore += breakdown.age;\n\n// 4. RUSSIAN LEVEL (0-15)\nconst russianLevel = String(data.russian_level || '').toLowerCase();\nif (['хороший', 'отличный', 'свободный', 'good'].includes(russianLevel)) {\n  breakdown.russian_level = 15;\n} else if (['базовый', 'средний', 'basic'].includes(russianLevel)) {\n  breakdown.russian_level = 10;\n} else if (['слабый', 'начальный', 'poor'].includes(russianLevel)) {\n  breakdown.russian_level = 5;\n} else {\n  breakdown.russian_level = 8;\n}\nscore += breakdown.russian_level;\n\n// 5. COMMUNICATION (0-10)\nbreakdown.communication = 10;\nscore += breakdown.communication;\n\n// DETERMINE RECOMMENDATION\nlet recommendation = 'manual_review';\nlet rejectionReason = null;\n\nif (age >= 50) {\n  recommendation = 'auto_reject';\n  rejectionReason = 'age';\n} else if (!hasAmina && ['no', 'нет', 'missing'].includes(docStatus)) {\n  recommendation = 'ask_documents';\n  rejectionReason = 'documents';\n} else if (['processing', 'оформляю'].includes(docStatus)) {\n  recommendation = 'documents_pending';\n} else if (score >= 65) {\n  recommendation = 'auto_approve';\n} else if (score >= 45) {\n  recommendation = 'manual_review';\n} else {\n  recommendation = 'auto_reject';\n  rejectionReason = 'low_score';\n}\n\nreturn {\n  ...input,\n  final_score: score,\n  score_breakdown: breakdown,\n  recommendation: recommendation,\n  rejection_reason: rejectionReason,\n  has_amina_app: hasAmina\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 200],
+      "id": "calculate-score",
+      "name": "Calculate Score"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Invalid data - return to interview\nconst input = $json;\nconst errors = input.validation_errors || {};\n\nlet missing = [];\nif (errors.missing_name) missing.push('имя');\nif (errors.missing_age) missing.push('возраст');\nif (errors.missing_phone) missing.push('телефон');\n\nreturn {\n  ...input,\n  recommendation: 'return_to_interview',\n  missing_fields: missing\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 450],
+      "id": "handle-invalid",
+      "name": "Handle Invalid Data"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.recommendation }}", "rightValue": "auto_approve", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Approve"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.recommendation }}", "rightValue": "auto_reject", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Reject"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.recommendation }}", "rightValue": "manual_review", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Review"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.recommendation }}", "rightValue": "documents_pending", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Pending"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.recommendation }}", "rightValue": "ask_documents", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "AskDocs"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [880, 200],
+      "id": "route-by-score",
+      "name": "Route by Score"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approved_candidates (\n  telegram_user_id, first_name, last_name, phone, age, citizenship,\n  experience, score, documents_status, has_amina_app, created_at\n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())\nON CONFLICT (telegram_user_id) DO UPDATE SET\n  score = EXCLUDED.score,\n  updated_at = NOW()\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.extracted_data.first_name, $json.extracted_data.last_name, $json.extracted_data.phone, $json.extracted_data.age, $json.extracted_data.citizenship, $json.extracted_data.experience, $json.final_score, $json.extracted_data.documents_status, $json.has_amina_app] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1100, 0],
+      "id": "save-approved",
+      "name": "Save Approved",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO rejected_candidates (\n  telegram_user_id, first_name, citizenship, age, rejection_reason, score, created_at\n) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.extracted_data.first_name, $json.extracted_data.citizenship, $json.extracted_data.age, $json.rejection_reason, $json.final_score] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1100, 150],
+      "id": "save-rejected",
+      "name": "Save Rejected",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "=✅ <b>КАНДИДАТ ОДОБРЕН</b>\n\n👤 {{ $json.extracted_data.first_name }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n🎂 {{ $json.extracted_data.age }} лет\n🌍 {{ $json.extracted_data.citizenship || '?' }}\n💼 {{ $json.extracted_data.experience || '?' }}\n📱 Амина: {{ $json.has_amina_app ? 'Да ✅' : 'Нет' }}\n\n⭐ <b>Score: {{ $json.final_score }}/100</b>\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n• Русский: {{ $json.score_breakdown.russian_level }}/15\n• Коммуникация: {{ $json.score_breakdown.communication }}/10\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать кандидату</a>",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 0],
+      "id": "notify-hr-approved",
+      "name": "Notify HR - Approved",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "=❌ <b>КАНДИДАТ ОТКЛОНЁН</b>\n\n👤 {{ $json.extracted_data.first_name || 'Неизвестно' }}\n❌ Причина: {{ $json.rejection_reason === 'age' ? 'Возраст >= 50 лет' : $json.rejection_reason === 'documents' ? 'Нет документов' : 'Низкий балл (' + $json.final_score + ')' }}\n⭐ Score: {{ $json.final_score }}/100\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Профиль</a>",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 150],
+      "id": "notify-hr-rejected",
+      "name": "Notify HR - Rejected",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "=🔍 <b>ТРЕБУЕТСЯ РЕШЕНИЕ HR</b>\n\n👤 {{ $json.extracted_data.first_name }} {{ $json.extracted_data.last_name || '' }}\n📱 {{ $json.extracted_data.phone || 'Не указан' }}\n🎂 {{ $json.extracted_data.age }} лет\n📱 Амина: {{ $json.has_amina_app ? 'Да' : 'Нет' }}\n\n⭐ Score: {{ $json.final_score }}/100\n\n📊 Breakdown:\n• Документы: {{ $json.score_breakdown.documents }}/25\n• Опыт: {{ $json.score_breakdown.experience }}/25\n• Возраст: {{ $json.score_breakdown.age }}/25\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать</a>",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 300],
+      "id": "notify-hr-review",
+      "name": "Notify HR - Review",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_HR_GROUP_CHAT_ID",
+        "text": "=📋 <b>КАНДИДАТ ОЖИДАЕТ ДОКУМЕНТЫ</b>\n\n👤 {{ $json.extracted_data.first_name }}\n🌍 {{ $json.extracted_data.citizenship || '?' }}\n📝 Статус: Оформляет документы\n\n🔗 <a href=\"tg://user?id={{ $json.user_id }}\">Написать</a>",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 450],
+      "id": "notify-hr-pending",
+      "name": "Notify HR - Pending",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
+        "text": "📝 У вас пока нет документов. Вам подойдёт ОДИН из вариантов:\n\n1️⃣ Приложение \"Амина\" — быстро и удобно!\n2️⃣ Полный пакет: паспорт + миграционная карта + регистрация\n\nВы оформляете документы? 🤔",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 600],
+      "id": "ask-documents",
+      "name": "Ask About Documents",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
+        "text": "🎉 Отлично! Ваша заявка принята!\n\nНаш HR-специалист свяжется с вами в ближайшее время. Спасибо за интерес к работе в BestHotel! 🏨",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1540, 0],
+      "id": "notify-candidate-approved",
+      "name": "Notify Candidate - Approved",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
+        "text": "Благодарим за интерес к нашим вакансиям! 🙏\n\nК сожалению, сейчас мы не можем предложить вам подходящую позицию. Мы сохраним вашу заявку и свяжемся, если появятся новые возможности.\n\nУдачи! 🤝",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1540, 150],
+      "id": "notify-candidate-rejected",
+      "name": "Notify Candidate - Rejected",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Execute Workflow Trigger').first().json.chat_id }}",
+        "text": "📝 Спасибо за информацию!\n\nКогда документы будут готовы — напишите нам! 🤝\n\n💡 Совет: Приложение \"Амина\" позволяет работать легально без бумажных документов!",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 450],
+      "id": "notify-candidate-pending",
+      "name": "Notify Candidate - Pending",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE candidate_sessions SET status = 'completed' WHERE telegram_user_id = $1",
+        "options": { "queryReplacement": "={{ [$json.user_id] }}" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1760, 200],
+      "id": "update-session",
+      "name": "Update Session Status",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [[{ "node": "Validate Data", "type": "main", "index": 0 }]]
+    },
+    "Validate Data": {
+      "main": [[{ "node": "IF Valid Data", "type": "main", "index": 0 }]]
+    },
+    "IF Valid Data": {
+      "main": [
+        [{ "node": "Calculate Score", "type": "main", "index": 0 }],
+        [{ "node": "Handle Invalid Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Calculate Score": {
+      "main": [[{ "node": "Route by Score", "type": "main", "index": 0 }]]
+    },
+    "Route by Score": {
+      "main": [
+        [{ "node": "Save Approved", "type": "main", "index": 0 }],
+        [{ "node": "Save Rejected", "type": "main", "index": 0 }],
+        [{ "node": "Notify HR - Review", "type": "main", "index": 0 }],
+        [{ "node": "Notify HR - Pending", "type": "main", "index": 0 }],
+        [{ "node": "Ask About Documents", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Approved": {
+      "main": [[{ "node": "Notify HR - Approved", "type": "main", "index": 0 }]]
+    },
+    "Save Rejected": {
+      "main": [[{ "node": "Notify HR - Rejected", "type": "main", "index": 0 }]]
+    },
+    "Notify HR - Approved": {
+      "main": [[{ "node": "Notify Candidate - Approved", "type": "main", "index": 0 }]]
+    },
+    "Notify HR - Rejected": {
+      "main": [[{ "node": "Notify Candidate - Rejected", "type": "main", "index": 0 }]]
+    },
+    "Notify HR - Pending": {
+      "main": [[{ "node": "Notify Candidate - Pending", "type": "main", "index": 0 }]]
+    },
+    "Notify Candidate - Approved": {
+      "main": [[{ "node": "Update Session Status", "type": "main", "index": 0 }]]
+    },
+    "Notify Candidate - Rejected": {
+      "main": [[{ "node": "Update Session Status", "type": "main", "index": 0 }]]
+    },
+    "Notify Candidate - Pending": {
+      "main": [[{ "node": "Update Session Status", "type": "main", "index": 0 }]]
+    },
+    "Notify HR - Review": {
+      "main": [[{ "node": "Update Session Status", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }, { "name": "Scoring" }, { "name": "Optimized" }],
+  "triggerCount": 0,
+  "meta": { "instanceId": "hr-bot-optimized" }
+}

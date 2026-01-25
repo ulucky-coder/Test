@@ -1,0 +1,247 @@
+{
+  "name": "03_HR_Bot_Health",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "id": "schedule-trigger",
+      "name": "Every 5 Minutes"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  'database' as service,\n  CASE WHEN COUNT(*) >= 0 THEN 'ok' ELSE 'error' END as status,\n  NOW() as checked_at\nFROM candidate_sessions\nLIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 200],
+      "id": "check-database",
+      "name": "Check Database",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_DEEPSEEK_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "deepseek-chat" },
+            { "name": "messages", "value": "[{\"role\":\"user\",\"content\":\"ping\"}]" },
+            { "name": "max_tokens", "value": "5" }
+          ]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 400],
+      "id": "check-deepseek",
+      "name": "Check DeepSeek API",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Database check result\nconst result = $json;\nconst isError = !result || result.error;\n\nreturn {\n  service: 'database',\n  status: isError ? 'error' : 'ok',\n  error: isError ? (result?.error?.message || 'Connection failed') : null,\n  checked_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200],
+      "id": "parse-db-result",
+      "name": "Parse DB Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Database error\nreturn {\n  service: 'database',\n  status: 'error',\n  error: 'Connection failed or timeout',\n  checked_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "id": "db-error",
+      "name": "DB Error"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DeepSeek check result\nconst result = $json;\nconst isOk = result && result.choices && result.choices.length > 0;\n\nreturn {\n  service: 'deepseek',\n  status: isOk ? 'ok' : 'error',\n  error: isOk ? null : 'Invalid response',\n  checked_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 400],
+      "id": "parse-deepseek-result",
+      "name": "Parse DeepSeek Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DeepSeek error\nreturn {\n  service: 'deepseek',\n  status: 'error',\n  error: 'API unavailable or timeout',\n  checked_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 500],
+      "id": "deepseek-error",
+      "name": "DeepSeek Error"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [660, 300],
+      "id": "merge-results",
+      "name": "Merge Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// HEALTH CHECK: Aggregate results and check for alerts\n// ============================================================\n\nconst items = $input.all();\nconst results = items.map(i => i.json);\n\nconst dbStatus = results.find(r => r.service === 'database');\nconst deepseekStatus = results.find(r => r.service === 'deepseek');\n\nconst hasErrors = results.some(r => r.status === 'error');\n\nconst summary = {\n  timestamp: new Date().toISOString(),\n  overall_status: hasErrors ? 'degraded' : 'healthy',\n  services: {\n    database: dbStatus?.status || 'unknown',\n    deepseek: deepseekStatus?.status || 'unknown'\n  },\n  errors: results.filter(r => r.status === 'error').map(r => ({\n    service: r.service,\n    error: r.error\n  })),\n  should_alert: hasErrors\n};\n\nreturn summary;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "id": "aggregate-health",
+      "name": "Aggregate Health"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            { "leftValue": "={{ $json.should_alert }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1100, 300],
+      "id": "if-alert",
+      "name": "IF Should Alert"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_ADMIN_CHAT_ID",
+        "text": "=🚨 <b>HR BOT HEALTH ALERT</b>\n\n⏰ {{ $json.timestamp }}\n📊 Status: {{ $json.overall_status.toUpperCase() }}\n\n<b>Services:</b>\n• Database: {{ $json.services.database === 'ok' ? '✅' : '❌' }} {{ $json.services.database }}\n• DeepSeek: {{ $json.services.deepseek === 'ok' ? '✅' : '❌' }} {{ $json.services.deepseek }}\n\n{{ $json.errors.length > 0 ? '<b>Errors:</b>\\n' + $json.errors.map(e => '• ' + e.service + ': ' + e.error).join('\\n') : '' }}",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 200],
+      "id": "send-alert",
+      "name": "Send Alert to Admin",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log healthy status\nconsole.log('✅ Health check passed:', JSON.stringify($json));\nreturn $json;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 400],
+      "id": "log-healthy",
+      "name": "Log Healthy"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO health_checks (service, status, error_message, checked_at)\nSELECT \n  unnest(ARRAY['database', 'deepseek']) as service,\n  unnest(ARRAY[$1, $2]) as status,\n  unnest(ARRAY[$3, $4]) as error_message,\n  NOW() as checked_at\nON CONFLICT (service) DO UPDATE SET\n  status = EXCLUDED.status,\n  error_message = EXCLUDED.error_message,\n  checked_at = EXCLUDED.checked_at",
+        "options": {
+          "queryReplacement": "={{ [$json.services.database, $json.services.deepseek, $json.errors.find(e => e.service === 'database')?.error || null, $json.errors.find(e => e.service === 'deepseek')?.error || null] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1540, 300],
+      "id": "save-health-status",
+      "name": "Save Health Status",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          { "node": "Check Database", "type": "main", "index": 0 },
+          { "node": "Check DeepSeek API", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Database": {
+      "main": [
+        [{ "node": "Parse DB Result", "type": "main", "index": 0 }],
+        [{ "node": "DB Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check DeepSeek API": {
+      "main": [
+        [{ "node": "Parse DeepSeek Result", "type": "main", "index": 0 }],
+        [{ "node": "DeepSeek Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse DB Result": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "DB Error": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+    },
+    "Parse DeepSeek Result": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 1 }]]
+    },
+    "DeepSeek Error": {
+      "main": [[{ "node": "Merge Results", "type": "main", "index": 1 }]]
+    },
+    "Merge Results": {
+      "main": [[{ "node": "Aggregate Health", "type": "main", "index": 0 }]]
+    },
+    "Aggregate Health": {
+      "main": [[{ "node": "IF Should Alert", "type": "main", "index": 0 }]]
+    },
+    "IF Should Alert": {
+      "main": [
+        [{ "node": "Send Alert to Admin", "type": "main", "index": 0 }],
+        [{ "node": "Log Healthy", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Alert to Admin": {
+      "main": [[{ "node": "Save Health Status", "type": "main", "index": 0 }]]
+    },
+    "Log Healthy": {
+      "main": [[{ "node": "Save Health Status", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }, { "name": "Health" }, { "name": "Monitoring" }],
+  "triggerCount": 1,
+  "meta": { "instanceId": "hr-bot-optimized" }
+}
