@@ -1,0 +1,115 @@
+{
+  "name": "HR Bot - 13 Google Sheets API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sheets-api",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "webhook-trigger",
+      "name": "Sheets API Webhook",
+      "webhookId": "sheets-api"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "1", "leftValue": "={{ $json.body.action }}", "rightValue": "list", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [220, 0],
+      "id": "check-action",
+      "name": "Action Router"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $json.body.spreadsheet_id }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "={{ $json.body.sheet_name || 'Sheet1' }}" },
+        "returnAll": false,
+        "limit": "={{ $json.body.limit || 100 }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [500, -200],
+      "id": "read-data",
+      "name": "Read Sheet Data",
+      "credentials": { "googleSheetsOAuth2Api": { "id": "YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $('Sheets API Webhook').item.json.body.spreadsheet_id }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "={{ $('Sheets API Webhook').item.json.body.sheet_name || 'Sheet1' }}" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {} },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [500, 0],
+      "id": "append-row",
+      "name": "Append Row",
+      "credentials": { "googleSheetsOAuth2Api": { "id": "YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $('Sheets API Webhook').item.json.body.spreadsheet_id }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "={{ $('Sheets API Webhook').item.json.body.sheet_name || 'Sheet1' }}" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {} },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [500, 200],
+      "id": "update-row",
+      "name": "Update Row",
+      "credentials": { "googleSheetsOAuth2Api": { "id": "YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Sheets API Webhook').first().json.body;\nconst action = input.action;\n\nswitch(action) {\n  case 'read':\n    return { next: 'read', data: input };\n  case 'append':\n    return { next: 'append', data: input.row_data };\n  case 'update':\n    return { next: 'update', data: input.row_data };\n  case 'create':\n    return { next: 'create', data: input };\n  default:\n    return { next: 'error', message: 'Unknown action: ' + action };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 200],
+      "id": "route-action",
+      "name": "Route by Action"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [720, 0],
+      "id": "respond",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "Sheets API Webhook": { "main": [[{ "node": "Route by Action", "type": "main", "index": 0 }]] },
+    "Route by Action": { "main": [[{ "node": "Read Sheet Data", "type": "main", "index": 0 }, { "node": "Append Row", "type": "main", "index": 0 }, { "node": "Update Row", "type": "main", "index": 0 }]] },
+    "Read Sheet Data": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "Append Row": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "Update Row": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "HR Bot" }, { "name": "Google Sheets" }, { "name": "API" }],
+  "meta": { "instanceId": "hr-bot-sheets-api" }
+}
