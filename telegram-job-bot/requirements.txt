@@ -1,0 +1,40 @@
+# Telegram MTProto Client
+pyrogram==2.0.106
+tgcrypto==1.2.5
+
+# Async HTTP
+aiohttp==3.9.1
+httpx==0.26.0
+
+# FastAPI for webhook server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+supabase==2.3.4
+asyncpg==0.29.0
+
+# AI Parsers
+openai==1.12.0
+anthropic==0.18.1
+
+# Scheduling
+apscheduler==3.10.4
+
+# Configuration
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Utilities
+tenacity==8.2.3
+structlog==24.1.0
+python-json-logger==2.0.7
+
+# Hashing
+xxhash==3.4.1
+
+# Date/Time
+python-dateutil==2.8.2
+pytz==2024.1

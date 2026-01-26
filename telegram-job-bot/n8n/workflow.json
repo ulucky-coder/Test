@@ -1,0 +1,536 @@
+{
+  "name": "Telegram Job Repost Bot",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "hourly-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JOB_BOT_API_URL }}/collect",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "trigger-collection",
+      "name": "Trigger Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [500, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-success",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-collection-result",
+      "name": "Collection Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JOB_BOT_API_URL }}/publish",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "5"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "trigger-publishing",
+      "name": "Trigger Publishing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1000, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.JOB_BOT_API_URL }}/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-status",
+      "name": "Get Bot Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [500, 700],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "Collection failed: {{ $json.message }}"
+      },
+      "id": "collection-error",
+      "name": "Log Collection Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "status-check-trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JOB_BOT_API_URL }}/publish/single",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.job_text }}"
+            },
+            {
+              "name": "contact_link",
+              "value": "={{ $json.contact_link || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "publish-single",
+      "name": "Publish Single Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [500, 900],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-bot-webhook",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook for Manual Jobs",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 900],
+      "webhookId": "job-bot-manual"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JOB_BOT_API_URL }}/parse",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "parse-preview",
+      "name": "Parse Job (Preview)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [500, 1100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-bot-preview",
+        "options": {}
+      },
+      "id": "preview-webhook",
+      "name": "Preview Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 1100],
+      "webhookId": "job-bot-preview"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.JOB_BOT_API_URL }}/groups",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "list-groups",
+      "name": "List Source Groups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [750, 700],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JOB_BOT_API_URL }}/groups",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "telegram_id",
+              "value": "={{ $json.telegram_id }}"
+            },
+            {
+              "name": "title",
+              "value": "={{ $json.title || '' }}"
+            },
+            {
+              "name": "username",
+              "value": "={{ $json.username || '' }}"
+            },
+            {
+              "name": "priority",
+              "value": "={{ $json.priority || 5 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "add-group",
+      "name": "Add Source Group",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [750, 900],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "add-source-group",
+        "options": {}
+      },
+      "id": "add-group-webhook",
+      "name": "Add Group Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [500, 1300],
+      "webhookId": "add-source-group"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.JOB_BOT_API_URL }}/queue",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-queue",
+      "name": "Get Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1000, 700],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "job-bot-api-key",
+          "name": "Job Bot API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "queue-not-empty",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-queue",
+      "name": "Queue Has Jobs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 700]
+    },
+    {
+      "parameters": {
+        "content": "## Telegram Job Repost Bot - n8n Workflow\n\n### Flows:\n1. **Hourly Collection**: Triggers job collection every hour\n2. **Status Check**: Monitors bot status every 30 minutes\n3. **Manual Publish**: Webhook to manually submit and publish jobs\n4. **Preview**: Parse job text without publishing\n5. **Group Management**: Add/list source groups\n\n### Environment Variables:\n- `JOB_BOT_API_URL`: Bot API URL (e.g., http://localhost:8080)\n\n### Credentials:\nCreate HTTP Header Auth credential with:\n- Header Name: `X-API-Key`\n- Header Value: Your webhook secret",
+        "height": 340,
+        "width": 400
+      },
+      "id": "notes",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 100]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Trigger Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Trigger Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Collection": {
+      "main": [
+        [
+          {
+            "node": "Collection Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collection Success?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Publishing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Collection Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Bot Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Bot Status": {
+      "main": [
+        [
+          {
+            "node": "List Source Groups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Source Groups": {
+      "main": [
+        [
+          {
+            "node": "Get Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Queue": {
+      "main": [
+        [
+          {
+            "node": "Queue Has Jobs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Has Jobs?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Publishing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook for Manual Jobs": {
+      "main": [
+        [
+          {
+            "node": "Publish Single Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preview Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Job (Preview)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Group Webhook": {
+      "main": [
+        [
+          {
+            "node": "Add Source Group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "telegram",
+      "id": "telegram"
+    },
+    {
+      "name": "job-bot",
+      "id": "job-bot"
+    }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}
