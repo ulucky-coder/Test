@@ -1,0 +1,436 @@
+{
+  "name": "HR Bot - Custom Reports",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "custom-reports",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "custom-reports"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse report command\nconst input = $input.item.json;\nconst command = input.command;\nconst args = input.args || '';\nconst chatId = input.chatId;\n\nconst today = new Date();\nconst formatDate = (d) => d.toISOString().split('T')[0];\n\nlet result = {\n  command,\n  reportType: null,\n  startDate: null,\n  endDate: null,\n  exportFormat: 'text',\n  chatId,\n  userId: input.userId,\n  username: input.username\n};\n\nswitch (command) {\n  case 'report':\n    if (args === 'today' || !args) {\n      result.reportType = 'candidates';\n      result.startDate = formatDate(today);\n      result.endDate = formatDate(today);\n      result.periodLabel = 'сегодня';\n    } else if (args === 'week') {\n      const weekAgo = new Date(today);\n      weekAgo.setDate(weekAgo.getDate() - 7);\n      result.reportType = 'candidates';\n      result.startDate = formatDate(weekAgo);\n      result.endDate = formatDate(today);\n      result.periodLabel = 'за неделю';\n    } else if (args === 'month') {\n      const monthAgo = new Date(today);\n      monthAgo.setMonth(monthAgo.getMonth() - 1);\n      result.reportType = 'candidates';\n      result.startDate = formatDate(monthAgo);\n      result.endDate = formatDate(today);\n      result.periodLabel = 'за месяц';\n    } else {\n      // Parse date range dd.mm-dd.mm\n      const dateRangeMatch = args.match(/(\\d{1,2})\\.(\\d{1,2})-(\\d{1,2})\\.(\\d{1,2})/);\n      if (dateRangeMatch) {\n        const year = today.getFullYear();\n        result.reportType = 'candidates';\n        result.startDate = `${year}-${dateRangeMatch[2].padStart(2,'0')}-${dateRangeMatch[1].padStart(2,'0')}`;\n        result.endDate = `${year}-${dateRangeMatch[4].padStart(2,'0')}-${dateRangeMatch[3].padStart(2,'0')}`;\n        result.periodLabel = `${dateRangeMatch[1]}.${dateRangeMatch[2]} - ${dateRangeMatch[3]}.${dateRangeMatch[4]}`;\n      } else {\n        result.error = 'Неверный формат даты. Используйте: /report week или /report 01.01-31.01';\n      }\n    }\n    break;\n\n  case 'stats':\n    result.reportType = args === 'recruiters' ? 'recruiter_stats' : 'funnel_stats';\n    result.periodLabel = '30 дней';\n    break;\n\n  case 'export':\n    result.exportFormat = 'excel';\n    const exportParts = args.split(' ');\n    result.reportType = exportParts[0] || 'candidates';\n    if (exportParts[1] === 'week') {\n      const weekAgo = new Date();\n      weekAgo.setDate(weekAgo.getDate() - 7);\n      result.startDate = formatDate(weekAgo);\n      result.endDate = formatDate(new Date());\n      result.periodLabel = 'за неделю';\n    } else {\n      const monthAgo = new Date();\n      monthAgo.setMonth(monthAgo.getMonth() - 1);\n      result.startDate = formatDate(monthAgo);\n      result.endDate = formatDate(new Date());\n      result.periodLabel = 'за месяц';\n    }\n    break;\n\n  default:\n    result.error = 'Неизвестная команда';\n}\n\nreturn { json: result };"
+      },
+      "id": "parse-command",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-error",
+      "name": "Has Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=❌ {{ $json.error }}",
+        "additionalFields": {}
+      },
+      "id": "send-error",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.reportType }}",
+                    "rightValue": "candidates",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "candidates"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.reportType }}",
+                    "rightValue": "funnel_stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "funnel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.reportType }}",
+                    "rightValue": "recruiter_stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "recruiters"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "report-type-switch",
+      "name": "Report Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [660, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM candidates \nWHERE DATE(created_at) BETWEEN '{{ $json.startDate }}' AND '{{ $json.endDate }}'\nORDER BY created_at DESC"
+      },
+      "id": "get-candidates",
+      "name": "Get Candidates",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 100],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_funnel_stats(30)"
+      },
+      "id": "get-funnel",
+      "name": "Get Funnel Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  telegram_username,\n  COUNT(*) as total_candidates,\n  COUNT(*) FILTER (WHERE status = 'работает') as hired_count,\n  ROUND(COUNT(*) FILTER (WHERE status = 'работает')::numeric / NULLIF(COUNT(*), 0) * 100) as conversion_rate\nFROM candidates\nWHERE created_at >= NOW() - INTERVAL '30 days'\nGROUP BY telegram_username\nORDER BY total_candidates DESC"
+      },
+      "id": "get-recruiters",
+      "name": "Get Recruiter Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build candidates report\nconst commandData = $('Parse Command').item.json;\nconst candidates = $input.all().map(i => i.json);\n\nlet report = `📊 *Отчёт по кандидатам*\\n`;\nreport += `📅 Период: ${commandData.periodLabel}\\n\\n`;\n\nif (candidates.length === 0) {\n  report += `_Кандидатов за указанный период не найдено._`;\n} else {\n  // Группировка по статусам\n  const byStatus = {};\n  candidates.forEach(c => {\n    if (!byStatus[c.status]) byStatus[c.status] = [];\n    byStatus[c.status].push(c);\n  });\n\n  report += `👥 Всего: ${candidates.length}\\n\\n`;\n\n  const statusEmoji = {\n    'направлен': '📋',\n    'собеседование': '🗣',\n    'оформление': '📝',\n    'работает': '✅',\n    'отказ': '❌',\n    'архив': '📦'\n  };\n\n  for (const [status, list] of Object.entries(byStatus)) {\n    report += `${statusEmoji[status] || '•'} ${status}: ${list.length}\\n`;\n  }\n\n  report += `\\n*Последние 10 добавленных:*\\n`;\n\n  candidates.slice(0, 10).forEach((c, i) => {\n    report += `\\n${i + 1}. *${c.full_name}*\\n`;\n    report += `   📞 ${c.phone || '-'}\\n`;\n    report += `   💼 ${c.position || '-'} | 📍 ${c.object_location || '-'}\\n`;\n    report += `   📊 ${c.status}\\n`;\n  });\n\n  if (candidates.length > 10) {\n    report += `\\n_...и ещё ${candidates.length - 10} кандидат(ов)_`;\n  }\n}\n\nconst keyboard = {\n  inline_keyboard: [\n    [\n      { text: '📥 Экспорт в Excel', callback_data: `export_candidates_${commandData.startDate}_${commandData.endDate}` }\n    ],\n    [\n      { text: '📊 Статистика воронки', callback_data: 'report_funnel' },\n      { text: '👥 По рекрутерам', callback_data: 'report_recruiters' }\n    ]\n  ]\n};\n\nreturn {\n  json: {\n    report,\n    keyboard,\n    chatId: commandData.chatId\n  }\n};"
+      },
+      "id": "build-candidates-report",
+      "name": "Build Candidates Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build funnel stats report\nconst commandData = $('Parse Command').item.json;\nconst stats = $input.all().map(i => i.json);\n\nlet report = `📊 *Воронка найма*\\n`;\nreport += `📅 Последние 30 дней\\n\\n`;\n\nconst statusEmoji = {\n  'направлен': '📋',\n  'собеседование': '🗣',\n  'оформление': '📝',\n  'работает': '✅',\n  'отказ': '❌',\n  'архив': '📦'\n};\n\nconst total = stats.reduce((sum, s) => sum + parseInt(s.count || 0), 0);\n\nstats.forEach(s => {\n  const emoji = statusEmoji[s.status] || '•';\n  const percentage = s.percentage || 0;\n  const bar = '█'.repeat(Math.round(percentage / 5));\n  report += `${emoji} *${s.status}*: ${s.count} (${percentage}%)\\n`;\n  report += `   ${bar}\\n\\n`;\n});\n\nreport += `\\n📈 *Конверсия:*\\n`;\nconst hired = stats.find(s => s.status === 'работает')?.count || 0;\nconst conversionRate = total > 0 ? Math.round((hired / total) * 100) : 0;\nreport += `Направлен → Работает: ${conversionRate}%`;\n\nreturn {\n  json: {\n    report,\n    chatId: commandData.chatId\n  }\n};"
+      },
+      "id": "build-funnel-report",
+      "name": "Build Funnel Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build recruiter stats report\nconst commandData = $('Parse Command').item.json;\nconst stats = $input.all().map(i => i.json);\n\nlet report = `👥 *Статистика по рекрутерам*\\n`;\nreport += `📅 Последние 30 дней\\n\\n`;\n\nif (stats.length === 0) {\n  report += `_Данных нет._`;\n} else {\n  stats.forEach((r, i) => {\n    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;\n    report += `${medal} @${r.telegram_username || 'Unknown'}\\n`;\n    report += `   📋 Добавлено: ${r.total_candidates}\\n`;\n    report += `   ✅ Трудоустроено: ${r.hired_count}\\n`;\n    report += `   📈 Конверсия: ${r.conversion_rate || 0}%\\n\\n`;\n  });\n}\n\nreturn {\n  json: {\n    report,\n    chatId: commandData.chatId\n  }\n};"
+      },
+      "id": "build-recruiter-report",
+      "name": "Build Recruiter Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.report }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ $json.keyboard ? JSON.stringify($json.keyboard) : '' }}"
+        }
+      },
+      "id": "send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1540, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Command": {
+      "main": [
+        [
+          {
+            "node": "Has Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Error?": {
+      "main": [
+        [
+          {
+            "node": "Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report Type": {
+      "main": [
+        [
+          {
+            "node": "Get Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Funnel Stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Recruiter Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Candidates": {
+      "main": [
+        [
+          {
+            "node": "Build Candidates Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Funnel Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Funnel Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recruiter Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Recruiter Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Candidates Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Funnel Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Recruiter Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

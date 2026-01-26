@@ -1,0 +1,342 @@
+{
+  "name": "HR Bot - Maintenance",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Cleanup expired LLM cache\nDELETE FROM llm_cache WHERE expires_at < NOW();\n\n-- Return count of deleted rows\nSELECT 'llm_cache' as table_name, COUNT(*) as deleted_count\nFROM llm_cache WHERE expires_at < NOW();"
+      },
+      "id": "cleanup-llm-cache",
+      "name": "Cleanup LLM Cache",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Cleanup old bot logs (older than 30 days)\nDELETE FROM bot_logs WHERE created_at < NOW() - INTERVAL '30 days';\n\nSELECT 'bot_logs' as table_name, COUNT(*) as deleted_count\nFROM bot_logs WHERE created_at < NOW() - INTERVAL '30 days';"
+      },
+      "id": "cleanup-logs",
+      "name": "Cleanup Old Logs",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Cleanup old audit logs (older than 90 days)\nDELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '90 days';\n\nSELECT 'audit_log' as table_name, COUNT(*) as deleted_count\nFROM audit_log WHERE created_at < NOW() - INTERVAL '90 days';"
+      },
+      "id": "cleanup-audit",
+      "name": "Cleanup Old Audit",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 600],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT link_all_unlinked_payments() as linked_count"
+      },
+      "id": "link-payments",
+      "name": "Link Unlinked Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [440, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "hr_bot:state:*",
+        "options": {
+          "keyPattern": true
+        }
+      },
+      "id": "cleanup-redis-old",
+      "name": "Cleanup Old Redis States",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [440, 500],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      },
+      "disabled": true,
+      "notes": "Redis TTL handles cleanup automatically. Enable if manual cleanup needed."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate maintenance results\nconst llmCacheResult = $('Cleanup LLM Cache').item?.json || {};\nconst logsResult = $('Cleanup Old Logs').item?.json || {};\nconst auditResult = $('Cleanup Old Audit').item?.json || {};\nconst linkResult = $('Link Unlinked Payments').item?.json || {};\n\nconst summary = {\n  timestamp: new Date().toISOString(),\n  cleanup: {\n    llm_cache: llmCacheResult.deleted_count || 0,\n    bot_logs: logsResult.deleted_count || 0,\n    audit_log: auditResult.deleted_count || 0\n  },\n  linkedPayments: linkResult.linked_count || 0\n};\n\n// Check if significant work was done\nconst totalCleaned = Object.values(summary.cleanup).reduce((a, b) => a + b, 0);\nconst significantWork = totalCleaned > 100 || summary.linkedPayments > 10;\n\nreturn {\n  json: {\n    ...summary,\n    significantWork,\n    totalCleaned\n  }\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "significant",
+              "leftValue": "={{ $json.significantWork }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-significant",
+      "name": "Significant Work?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "admin_notifications",
+        "fieldsToSend": {
+          "values": [
+            {
+              "fieldId": "title",
+              "fieldValue": "Результаты обслуживания"
+            },
+            {
+              "fieldId": "message",
+              "fieldValue": "=Очистка данных:\\n- LLM кэш: {{ $json.cleanup.llm_cache }} записей\\n- Логи: {{ $json.cleanup.bot_logs }} записей\\n- Аудит: {{ $json.cleanup.audit_log }} записей\\n\\nСвязано оплат с кандидатами: {{ $json.linkedPayments }}"
+            },
+            {
+              "fieldId": "level",
+              "fieldValue": "info"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "maintenance"
+            }
+          ]
+        }
+      },
+      "id": "create-notification",
+      "name": "Create Admin Notification",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "bot_logs",
+        "fieldsToSend": {
+          "values": [
+            {
+              "fieldId": "level",
+              "fieldValue": "info"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "maintenance"
+            },
+            {
+              "fieldId": "message",
+              "fieldValue": "=Maintenance completed. Cleaned: {{ $json.totalCleaned }}, Linked: {{ $json.linkedPayments }}"
+            },
+            {
+              "fieldId": "context",
+              "fieldValue": "={{ JSON.stringify($json) }}"
+            }
+          ]
+        }
+      },
+      "id": "log-maintenance",
+      "name": "Log Maintenance",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Cleanup LLM Cache",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cleanup Old Logs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cleanup Old Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup LLM Cache": {
+      "main": [
+        [
+          {
+            "node": "Link Unlinked Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Old Logs": {
+      "main": [
+        [
+          {
+            "node": "Link Unlinked Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Old Audit": {
+      "main": [
+        [
+          {
+            "node": "Link Unlinked Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Unlinked Payments": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Significant Work?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Significant Work?": {
+      "main": [
+        [
+          {
+            "node": "Create Admin Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Maintenance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Admin Notification": {
+      "main": [
+        [
+          {
+            "node": "Log Maintenance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}
