@@ -456,7 +456,7 @@
     {
       "parameters": {
         "operation": "set",
-        "key": "={{ 'budget_bot:state:' + $json.chatId }}",
+        "key": "={{ 'budget_bot:state:' + $('Validate Budget').first().json.chatId }}",
         "value": "base",
         "expire": true,
         "ttl": 2592000
