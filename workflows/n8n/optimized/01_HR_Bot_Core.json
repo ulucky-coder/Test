@@ -1,0 +1,552 @@
+{
+  "name": "01_HR_Bot_Core",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "webhookId": "hr-bot-core",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// EXTRACT INPUT: Извлечение данных из Telegram\n// ============================================================\n\nconst input = $json;\n\n// Обработка обычного сообщения или callback\nconst message = input.message || input.callback_query?.message || {};\nconst callbackData = input.callback_query?.data || null;\nconst from = input.message?.from || input.callback_query?.from || {};\n\nreturn {\n  // Идентификаторы\n  chat_id: String(message.chat?.id || from.id || ''),\n  user_id: String(from.id || ''),\n  message_id: message.message_id,\n  \n  // Данные пользователя\n  first_name: from.first_name || '',\n  last_name: from.last_name || '',\n  username: from.username || '',\n  language_code: from.language_code || 'ru',\n  \n  // Сообщение\n  user_message: message.text || callbackData || '',\n  callback_data: callbackData,\n  is_callback: !!callbackData,\n  \n  // Timestamp\n  timestamp: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "id": "extract-input",
+      "name": "Extract Input"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Оптимизированный CTE: сессия + история + вакансии за 1 запрос\nWITH session_data AS (\n  INSERT INTO candidate_sessions (telegram_user_id, first_name, username, language, status, created_at, updated_at)\n  VALUES ($1, $2, $3, 'ru', 'active', NOW(), NOW())\n  ON CONFLICT (telegram_user_id) DO UPDATE SET\n    updated_at = NOW(),\n    first_name = COALESCE(EXCLUDED.first_name, candidate_sessions.first_name)\n  RETURNING id, telegram_user_id, language, status, known_data, created_at,\n    CASE WHEN created_at = NOW() THEN true ELSE false END as is_new\n),\nchat_history AS (\n  SELECT COALESCE(\n    json_agg(json_build_object('role', role, 'content', content) ORDER BY created_at DESC),\n    '[]'::json\n  ) as history\n  FROM (\n    SELECT role, content, created_at \n    FROM chat_messages \n    WHERE telegram_user_id = $1 \n    ORDER BY created_at DESC \n    LIMIT 10\n  ) recent\n),\nvacancies AS (\n  SELECT COALESCE(\n    json_agg(json_build_object('id', id, 'title', title, 'description', description, 'salary', salary)),\n    '[]'::json\n  ) as list\n  FROM vacancies \n  WHERE is_active = true\n)\nSELECT \n  s.id as session_id,\n  s.telegram_user_id,\n  s.language,\n  s.status as session_status,\n  COALESCE(s.known_data, '{}'::jsonb) as known_data,\n  s.is_new as is_new_user,\n  h.history as chat_history,\n  v.list as vacancies\nFROM session_data s\nCROSS JOIN chat_history h\nCROSS JOIN vacancies v;",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.first_name, $json.username] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [440, 300],
+      "id": "session-manager",
+      "name": "Session Manager",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// FALLBACK: Если БД недоступна - работаем stateless\n// ============================================================\n\nconst input = $('Extract Input').first().json;\n\nconsole.log('⚠️ Database unavailable, using stateless mode');\n\nreturn {\n  ...input,\n  session_id: 'stateless_' + input.user_id,\n  session_status: 'active',\n  is_new_user: true,\n  known_data: {},\n  chat_history: [],\n  vacancies: [],\n  db_available: false,\n  language: 'ru'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 500],
+      "id": "db-fallback",
+      "name": "DB Fallback (Stateless)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// MERGE CONTEXT: Объединяем данные сессии с входными данными\n// ============================================================\n\nconst input = $('Extract Input').first().json;\nconst session = $json[0] || $json;\n\n// Форматируем историю чата для промпта\nlet historyText = 'История диалога пуста (новый пользователь)';\ntry {\n  const history = session.chat_history || [];\n  if (Array.isArray(history) && history.length > 0) {\n    historyText = history\n      .slice(0, 5)\n      .map(m => `${m.role === 'user' ? 'Кандидат' : 'Бот'}: ${m.content}`)\n      .join('\\n');\n  }\n} catch (e) {\n  historyText = 'История недоступна';\n}\n\n// Форматируем вакансии\nlet vacanciesText = 'Вакансии загружаются...';\ntry {\n  const vacancies = session.vacancies || [];\n  if (Array.isArray(vacancies) && vacancies.length > 0) {\n    vacanciesText = vacancies\n      .map(v => `• ${v.title}: ${v.salary || 'по договорённости'}`)\n      .join('\\n');\n  }\n} catch (e) {\n  vacanciesText = 'Горничная, Администратор, Официант';\n}\n\nreturn {\n  // Идентификаторы\n  chat_id: input.chat_id,\n  user_id: input.user_id,\n  session_id: session.session_id || 'unknown',\n  \n  // Данные пользователя\n  first_name: input.first_name,\n  username: input.username,\n  language: session.language || 'ru',\n  \n  // Сообщение\n  user_message: input.user_message,\n  callback_data: input.callback_data,\n  is_callback: input.is_callback,\n  \n  // Сессия\n  session_status: session.session_status || 'active',\n  is_new_user: session.is_new_user || false,\n  known_data: session.known_data || {},\n  \n  // Контекст для LLM\n  chat_history: session.chat_history || [],\n  chat_history_text: historyText,\n  vacancies: session.vacancies || [],\n  vacancies_text: vacanciesText,\n  \n  // Флаги\n  db_available: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "id": "merge-context",
+      "name": "Merge Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// REGEX PRE-ROUTER: Быстрая маршрутизация без LLM\n// Экономит ~40% вызовов API\n// ============================================================\n\nconst input = $json;\nconst msg = (input.user_message || '').toLowerCase().trim();\nconst callback = input.callback_data || '';\n\nlet route = null;\nlet confidence = 1.0;\nlet needsLlm = true;\n\n// === CALLBACK QUERIES ===\nif (callback) {\n  if (callback.startsWith('lang_')) {\n    route = 'LANGUAGE';\n    needsLlm = false;\n  }\n}\n\n// === COMMANDS ===\nelse if (msg === '/start' || msg === 'start') {\n  route = 'GREETING';\n  needsLlm = false;\n}\nelse if (msg === '/cancel' || msg === '/stop' || msg === 'отмена' || msg === 'стоп') {\n  route = 'CANCEL';\n  needsLlm = false;\n}\nelse if (msg === '/restart' || msg === '/reset' || msg === 'заново' || msg === 'начать заново') {\n  route = 'GREETING';\n  needsLlm = false;\n}\nelse if (msg === '/help' || msg === 'помощь' || msg === 'помоги') {\n  route = 'FAQ';\n  needsLlm = false;\n}\n\n// === GREETINGS ===\nelse if (/^(привет|здравствуй|салам|хай|hello|hi|добрый\\s*(день|вечер|утро))/.test(msg)) {\n  // Если новый пользователь - приветствие, иначе интервью\n  route = input.is_new_user ? 'GREETING' : 'INTERVIEW';\n  needsLlm = false;\n  confidence = 0.9;\n}\n\n// === LANGUAGE SELECTION ===\nelse if (/^(русский|узбекский|кыргызский|таджикский|рус|узб|кырг|тадж)/i.test(msg)) {\n  route = 'LANGUAGE';\n  needsLlm = false;\n}\n\n// === FAQ KEYWORDS ===\nelse if (/^(вакансии|зарплата|график|условия|где работа|какие вакансии)/i.test(msg)) {\n  route = 'FAQ';\n  needsLlm = false;\n  confidence = 0.85;\n}\n\n// === SHORT ANSWERS (likely interview) ===\nelse if (msg.length < 50 && !input.is_new_user) {\n  // Короткие ответы от существующего пользователя - скорее всего интервью\n  route = 'INTERVIEW';\n  needsLlm = false;\n  confidence = 0.8;\n}\n\nreturn {\n  ...input,\n  fast_route: route,\n  route_confidence: confidence,\n  needs_llm: needsLlm\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "id": "regex-pre-router",
+      "name": "Regex Pre-Router"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            { "leftValue": "={{ $json.needs_llm }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1100, 300],
+      "id": "if-needs-llm",
+      "name": "IF Needs LLM"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Сообщение: {{ $json.user_message }}\n\nКатегория:",
+        "options": {
+          "systemMessage": "Ты классификатор сообщений для HR-бота. Определи категорию сообщения.\n\nКАТЕГОРИИ:\n- GREETING: приветствие, /start\n- INTERVIEW: ответы на вопросы интервью, данные о себе\n- FAQ: вопросы о вакансиях, зарплате, условиях\n- ESCALATION: жалобы, просьба связать с человеком\n- CANCEL: отмена, стоп\n\nОтветь ОДНИМ СЛОВОМ - название категории.",
+          "maxTokens": 20,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [1320, 200],
+      "id": "llm-router",
+      "name": "LLM Router",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "YOUR_DEEPSEEK_CREDENTIAL_ID",
+          "name": "DeepSeek"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response\nconst input = $('Regex Pre-Router').first().json;\nconst llmResponse = ($json.text || $json.content || 'INTERVIEW').toUpperCase().trim();\n\nconst validRoutes = ['GREETING', 'INTERVIEW', 'FAQ', 'ESCALATION', 'CANCEL', 'LANGUAGE'];\nlet route = validRoutes.includes(llmResponse) ? llmResponse : 'INTERVIEW';\n\nreturn {\n  ...input,\n  route_category: route,\n  route_source: 'llm'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200],
+      "id": "parse-llm-route",
+      "name": "Parse LLM Route"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LLM Error Fallback - default to INTERVIEW\nconst input = $('Regex Pre-Router').first().json;\n\nconsole.log('⚠️ LLM Router error, defaulting to INTERVIEW');\n\nreturn {\n  ...input,\n  route_category: 'INTERVIEW',\n  route_source: 'fallback'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 350],
+      "id": "llm-error-fallback",
+      "name": "LLM Error Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fast Route Result - use regex route\nconst input = $json;\n\nreturn {\n  ...input,\n  route_category: input.fast_route || 'INTERVIEW',\n  route_source: 'regex'\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 450],
+      "id": "fast-route-result",
+      "name": "Fast Route Result"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "GREETING", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Greeting"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "INTERVIEW", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Interview"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "FAQ", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "FAQ"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "CANCEL", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Cancel"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "LANGUAGE", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Language"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [{ "leftValue": "={{ $json.route_category }}", "rightValue": "ESCALATION", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Escalation"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1760, 300],
+      "id": "route-switch",
+      "name": "Route Switch"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// GREETING HANDLER: Статическое приветствие (без LLM)\n// ============================================================\n\nconst input = $json;\n\nconst greetingMessage = `👋 Здравствуйте${input.first_name ? ', ' + input.first_name : ''}! Добро пожаловать в BestHotel!\n\nЯ — AI-рекрутер, и я помогу вам узнать о наших вакансиях и пройти короткое собеседование. 🤝\n\nМы ищем сотрудников для работы в отелях: горничные, администраторы, официанты и другие позиции.\n\n🌍 Выберите удобный язык общения:`;\n\nreturn {\n  ...input,\n  response_message: greetingMessage,\n  show_language_buttons: true,\n  interview_complete: false,\n  extracted_data: {}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 100],
+      "id": "greeting-handler",
+      "name": "Greeting Handler"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Сообщение кандидата: {{ $json.user_message }}\n\nИзвестные данные о кандидате:\n{{ JSON.stringify($json.known_data) }}\n\nИстория диалога:\n{{ $json.chat_history_text }}\n\nДоступные вакансии:\n{{ $json.vacancies_text }}",
+        "options": {
+          "systemMessage": "Ты — дружелюбный рекрутер BestHotel. Проводишь первичное собеседование. 🏨\n\nТВОЯ ЗАДАЧА:\n1. Собрать данные: имя, гражданство, возраст, опыт работы, документы/Амина, телефон\n2. Задавать вопросы ПО ОДНОМУ\n3. НЕ ПЕРЕСПРАШИВАТЬ то, что уже известно из known_data\n\nПРАВИЛА ДОКУМЕНТОВ:\nКандидату достаточно ОДНО из двух:\n- Приложение \"Амина\" (заменяет все документы)\n- ИЛИ полный пакет: паспорт + миграционная карта + регистрация\n\nОБЯЗАТЕЛЬНЫЕ ДАННЫЕ:\n- first_name (имя)\n- citizenship (гражданство)\n- age (возраст, строго до 50 лет!)\n- experience (опыт)\n- documents_status (yes/no/processing) ИЛИ has_amina_app (true/false)\n- phone (+7XXXXXXXXXX)\n\nКОГДА ВСЕ СОБРАНО:\nПокажи сводку и спроси подтверждение. После подтверждения установи interview_complete: true\n\nОтвечай JSON без markdown:\n{\"message\": \"текст\", \"extracted_data\": {...}, \"interview_complete\": false}",
+          "maxTokens": 500,
+          "temperature": 0.4
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [2000, 300],
+      "id": "interview-llm",
+      "name": "Interview LLM",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "YOUR_DEEPSEEK_CREDENTIAL_ID",
+          "name": "DeepSeek"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// INTERVIEW RESPONSE PARSER\n// ============================================================\n\nconst input = $('Route Switch').first().json;\nconst llmResponse = $json;\n\nlet parsed = {\n  message: 'Расскажите немного о себе. Как вас зовут? 🤝',\n  extracted_data: {},\n  interview_complete: false\n};\n\ntry {\n  const rawOutput = llmResponse.text || llmResponse.content || '';\n  const cleanJson = String(rawOutput).replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  const jsonMatch = cleanJson.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsed = { ...parsed, ...JSON.parse(jsonMatch[0]) };\n  }\n} catch (e) {\n  console.log('Parse error:', e.message);\n}\n\n// Merge known data\nconst mergedData = { ...(input.known_data || {}) };\nif (parsed.extracted_data) {\n  Object.entries(parsed.extracted_data).forEach(([key, value]) => {\n    if (value && value !== null && value !== 'null' && value !== '') {\n      mergedData[key] = value;\n    }\n  });\n}\n\n// Phone validation\nif (mergedData.phone) {\n  let phone = String(mergedData.phone).replace(/[\\s\\-\\(\\)]/g, '');\n  if (phone.startsWith('8') && phone.length === 11) phone = '+7' + phone.substring(1);\n  else if (phone.startsWith('7') && phone.length === 11) phone = '+' + phone;\n  if (/^\\+7\\d{10}$/.test(phone)) mergedData.phone = phone;\n  else mergedData.phone = null;\n}\n\nreturn {\n  ...input,\n  response_message: parsed.message,\n  extracted_data: mergedData,\n  known_data: mergedData,\n  interview_complete: parsed.interview_complete || false,\n  show_language_buttons: false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 300],
+      "id": "parse-interview",
+      "name": "Parse Interview Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Interview LLM Error Fallback\nconst input = $('Route Switch').first().json;\n\nreturn {\n  ...input,\n  response_message: 'Извините, произошла техническая ошибка. 🔧 Пожалуйста, повторите ваше сообщение.',\n  extracted_data: input.known_data || {},\n  interview_complete: false,\n  show_language_buttons: false\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 500],
+      "id": "interview-error-fallback",
+      "name": "Interview Error Fallback"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// FAQ HANDLER: Ответы на частые вопросы\n// ============================================================\n\nconst input = $json;\nconst msg = (input.user_message || '').toLowerCase();\n\nlet response = '';\n\nif (msg.includes('вакансии') || msg.includes('работа')) {\n  response = '🏨 Наши актуальные вакансии:\\n\\n' + (input.vacancies_text || '• Горничная\\n• Администратор\\n• Официант') + '\\n\\nХотите пройти собеседование? Напишите \"Да\"!';\n} else if (msg.includes('зарплата') || msg.includes('оплата')) {\n  response = '💰 Зарплата зависит от позиции и опыта:\\n\\n• Горничная: от 45,000 ₽\\n• Администратор: от 55,000 ₽\\n• Официант: от 50,000 ₽\\n\\nОплата стабильная, 2 раза в месяц!';\n} else if (msg.includes('график') || msg.includes('режим')) {\n  response = '📅 Графики работы:\\n\\n• 2/2 или 5/2\\n• Смены по 8-12 часов\\n• Возможны ночные смены\\n\\nКонкретный график обсуждается индивидуально.';\n} else if (msg.includes('документ')) {\n  response = '📋 Для работы нужно ОДНО из двух:\\n\\n1️⃣ Приложение \"Амина\" — быстро и удобно!\\n2️⃣ Полный пакет: паспорт + миграционная карта + регистрация\\n\\nЕсли документы в процессе оформления — тоже напишите!';\n} else {\n  response = '❓ Я могу ответить на вопросы о:\\n\\n• Вакансиях\\n• Зарплате\\n• Графике работы\\n• Документах\\n\\nИли напишите \"Собеседование\" чтобы начать!';\n}\n\nreturn {\n  ...input,\n  response_message: response,\n  show_language_buttons: false,\n  interview_complete: false,\n  extracted_data: input.known_data || {}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 500],
+      "id": "faq-handler",
+      "name": "FAQ Handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// CANCEL HANDLER: Отмена/сброс сессии\n// ============================================================\n\nconst input = $json;\n\nreturn {\n  ...input,\n  response_message: '🔄 Сессия сброшена.\\n\\nНапишите /start чтобы начать заново.',\n  show_language_buttons: false,\n  interview_complete: false,\n  extracted_data: {},\n  reset_session: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 700],
+      "id": "cancel-handler",
+      "name": "Cancel Handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// LANGUAGE HANDLER: Обработка выбора языка\n// ============================================================\n\nconst input = $json;\nconst callback = input.callback_data || '';\nconst msg = (input.user_message || '').toLowerCase();\n\n// Определяем выбранный язык\nlet selectedLang = 'ru';\nlet langName = 'Русский';\n\nif (callback === 'lang_uz' || msg.includes('узбек') || msg.includes('uzbek')) {\n  selectedLang = 'uz';\n  langName = \"O'zbek tili\";\n} else if (callback === 'lang_kg' || msg.includes('кыргыз') || msg.includes('kyrgyz')) {\n  selectedLang = 'kg';\n  langName = 'Кыргыз тили';\n} else if (callback === 'lang_tj' || msg.includes('тадж') || msg.includes('tajik')) {\n  selectedLang = 'tj';\n  langName = 'Тоҷикӣ';\n}\n\n// Сообщения на разных языках\nconst messages = {\n  ru: `✅ Отлично! Язык установлен: Русский\\n\\nТеперь давайте познакомимся! Как вас зовут?`,\n  uz: `✅ Juda yaxshi! Til tanlandi: O'zbek\\n\\nKeling, tanishamiz! Ismingiz nima?`,\n  kg: `✅ Абдан жакшы! Тил тандалды: Кыргызча\\n\\nКелиңиз, таанышалы! Атыңыз ким?`,\n  tj: `✅ Хеле хуб! Забон интихоб шуд: Тоҷикӣ\\n\\nБиёед шинос шавем! Номи шумо чист?`\n};\n\nreturn {\n  ...input,\n  response_message: messages[selectedLang],\n  selected_language: selectedLang,\n  language: selectedLang,\n  show_language_buttons: false,\n  interview_complete: false,\n  extracted_data: input.known_data || {},\n  update_language: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 900],
+      "id": "language-handler",
+      "name": "Language Handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ESCALATION HANDLER: Передача менеджеру\n// ============================================================\n\nconst input = $json;\n\nconst escalationMessage = `🙋 Понимаю, что вам нужна помощь живого специалиста!\\n\\nЯ передам ваш запрос нашему HR-менеджеру. Он свяжется с вами в ближайшее время.\\n\\n📞 Или вы можете позвонить напрямую: +7 (XXX) XXX-XX-XX\\n📧 Email: hr@besthotel.com\\n\\nСпасибо за терпение! 🙏`;\n\nreturn {\n  ...input,\n  response_message: escalationMessage,\n  show_language_buttons: false,\n  interview_complete: false,\n  extracted_data: input.known_data || {},\n  needs_escalation: true\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 1100],
+      "id": "escalation-handler",
+      "name": "Escalation Handler"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [2500, 300],
+      "id": "merge-responses",
+      "name": "Merge Responses"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_messages (telegram_user_id, session_id, role, content, created_at)\nVALUES ($1, $2, 'user', $3, NOW()), ($1, $2, 'assistant', $4, NOW())",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.session_id, $json.user_message, $json.response_message] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2720, 300],
+      "id": "save-history",
+      "name": "Save Chat History",
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres HR Bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            { "leftValue": "={{ $json.show_language_buttons }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [2940, 300],
+      "id": "if-show-buttons",
+      "name": "IF Show Buttons"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.response_message }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            { "row": { "buttons": [
+              { "text": "🇷🇺 Русский", "additionalFields": { "callback_data": "lang_ru" } },
+              { "text": "🇺🇿 O'zbek", "additionalFields": { "callback_data": "lang_uz" } }
+            ] } },
+            { "row": { "buttons": [
+              { "text": "🇰🇬 Кыргызча", "additionalFields": { "callback_data": "lang_kg" } },
+              { "text": "🇹🇯 Тоҷикӣ", "additionalFields": { "callback_data": "lang_tj" } }
+            ] } }
+          ]
+        },
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3160, 200],
+      "id": "send-with-buttons",
+      "name": "Send With Language Buttons",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.response_message }}",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3160, 400],
+      "id": "send-message",
+      "name": "Send Message",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            { "leftValue": "={{ $json.interview_complete }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [3380, 300],
+      "id": "if-complete",
+      "name": "IF Interview Complete"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "list", "value": "" },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [3600, 200],
+      "id": "call-scoring",
+      "name": "Call Scoring Engine",
+      "notes": "02_HR_Bot_Scoring"
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{ "node": "Extract Input", "type": "main", "index": 0 }]]
+    },
+    "Extract Input": {
+      "main": [[{ "node": "Session Manager", "type": "main", "index": 0 }]]
+    },
+    "Session Manager": {
+      "main": [
+        [{ "node": "Merge Context", "type": "main", "index": 0 }],
+        [{ "node": "DB Fallback (Stateless)", "type": "main", "index": 0 }]
+      ]
+    },
+    "DB Fallback (Stateless)": {
+      "main": [[{ "node": "Merge Context", "type": "main", "index": 0 }]]
+    },
+    "Merge Context": {
+      "main": [[{ "node": "Regex Pre-Router", "type": "main", "index": 0 }]]
+    },
+    "Regex Pre-Router": {
+      "main": [[{ "node": "IF Needs LLM", "type": "main", "index": 0 }]]
+    },
+    "IF Needs LLM": {
+      "main": [
+        [{ "node": "LLM Router", "type": "main", "index": 0 }],
+        [{ "node": "Fast Route Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "LLM Router": {
+      "main": [
+        [{ "node": "Parse LLM Route", "type": "main", "index": 0 }],
+        [{ "node": "LLM Error Fallback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse LLM Route": {
+      "main": [[{ "node": "Route Switch", "type": "main", "index": 0 }]]
+    },
+    "LLM Error Fallback": {
+      "main": [[{ "node": "Route Switch", "type": "main", "index": 0 }]]
+    },
+    "Fast Route Result": {
+      "main": [[{ "node": "Route Switch", "type": "main", "index": 0 }]]
+    },
+    "Route Switch": {
+      "main": [
+        [{ "node": "Greeting Handler", "type": "main", "index": 0 }],
+        [{ "node": "Interview LLM", "type": "main", "index": 0 }],
+        [{ "node": "FAQ Handler", "type": "main", "index": 0 }],
+        [{ "node": "Cancel Handler", "type": "main", "index": 0 }],
+        [{ "node": "Language Handler", "type": "main", "index": 0 }],
+        [{ "node": "Escalation Handler", "type": "main", "index": 0 }],
+        [{ "node": "Interview LLM", "type": "main", "index": 0 }]
+      ]
+    },
+    "Greeting Handler": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Interview LLM": {
+      "main": [
+        [{ "node": "Parse Interview Response", "type": "main", "index": 0 }],
+        [{ "node": "Interview Error Fallback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Interview Response": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Interview Error Fallback": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "FAQ Handler": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Cancel Handler": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Language Handler": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Escalation Handler": {
+      "main": [[{ "node": "Merge Responses", "type": "main", "index": 0 }]]
+    },
+    "Merge Responses": {
+      "main": [[{ "node": "Save Chat History", "type": "main", "index": 0 }]]
+    },
+    "Save Chat History": {
+      "main": [[{ "node": "IF Show Buttons", "type": "main", "index": 0 }]]
+    },
+    "IF Show Buttons": {
+      "main": [
+        [{ "node": "Send With Language Buttons", "type": "main", "index": 0 }],
+        [{ "node": "Send Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send With Language Buttons": {
+      "main": [[{ "node": "IF Interview Complete", "type": "main", "index": 0 }]]
+    },
+    "Send Message": {
+      "main": [[{ "node": "IF Interview Complete", "type": "main", "index": 0 }]]
+    },
+    "IF Interview Complete": {
+      "main": [
+        [{ "node": "Call Scoring Engine", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }, { "name": "Core" }, { "name": "Optimized" }],
+  "triggerCount": 1,
+  "meta": { "instanceId": "hr-bot-optimized" }
+}
