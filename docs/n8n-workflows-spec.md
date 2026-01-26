@@ -1,50 +1,189 @@
-# Спецификация n8n Workflows
+# Спецификация n8n Workflows (v2.0)
 
 ## Обзор
 
 | # | Workflow | Триггер | Описание |
 |---|----------|---------|----------|
-| 1 | HR Bot - Message Router | Telegram Trigger | Приём и маршрутизация сообщений |
-| 2 | HR Bot - Candidate Processor | Webhook (internal) | Обработка данных кандидатов |
-| 3 | HR Bot - Payment Processor | Webhook (internal) | Обработка данных оплаты |
+| 1 | HR Bot - Message Router | Telegram Trigger | Приём, классификация и маршрутизация сообщений |
+| 2 | HR Bot - Candidate Processor | Webhook (internal) | Обработка данных кандидатов с LLM |
+| 3 | HR Bot - Payment Processor | Webhook (internal) | Обработка данных оплаты (batch) |
 | 4 | HR Bot - Daily Report | Schedule (22:00 MSK) | Ежедневный отчёт |
-| 5 | HR Bot - State Cleanup | Schedule (hourly) | Очистка устаревших состояний |
+| 5 | HR Bot - Custom Reports | Telegram Command | Кастомные отчёты по команде |
+| 6 | HR Bot - Status Manager | Telegram Command | Управление статусами кандидатов |
+| 7 | HR Bot - Admin Notifications | Schedule (5 min) | Отправка уведомлений администратору |
+| 8 | HR Bot - Maintenance | Schedule (hourly) | Очистка, линковка, обслуживание |
+
+---
+
+## Общие компоненты
+
+### Inline-кнопки (Telegram Keyboard)
+
+Используется во всех workflows для улучшения UX.
+
+```javascript
+// Функция генерации inline-кнопок
+function createInlineKeyboard(buttons) {
+  return {
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  };
+}
+
+// Пример: кнопки подтверждения
+const confirmButtons = [
+  [
+    { text: '✅ Да', callback_data: 'confirm_yes' },
+    { text: '❌ Нет', callback_data: 'confirm_no' }
+  ],
+  [
+    { text: '✏️ Изменить', callback_data: 'confirm_edit' }
+  ]
+];
+
+// Пример: кнопки статусов
+const statusButtons = [
+  [
+    { text: '📋 Собеседование', callback_data: 'status_собеседование' },
+    { text: '📝 Оформление', callback_data: 'status_оформление' }
+  ],
+  [
+    { text: '✅ Работает', callback_data: 'status_работает' },
+    { text: '❌ Отказ', callback_data: 'status_отказ' }
+  ]
+];
+```
+
+### Прогресс-бар заполнения
+
+```javascript
+// Функция генерации прогресс-бара
+function createProgressBar(filled, total) {
+  const filledBlocks = Math.round((filled / total) * 10);
+  const emptyBlocks = 10 - filledBlocks;
+  const percentage = Math.round((filled / total) * 100);
+
+  return `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}] ${percentage}%`;
+}
+
+// Функция форматирования статуса полей
+function formatFieldsStatus(data, requiredFields) {
+  let result = '';
+  const fieldLabels = {
+    full_name: 'ФИО',
+    phone: 'Телефон',
+    position: 'Должность',
+    object_location: 'Объект',
+    age: 'Возраст',
+    gender: 'Пол',
+    experience: 'Опыт'
+  };
+
+  let filled = 0;
+  for (const field of requiredFields) {
+    const value = data[field];
+    const label = fieldLabels[field];
+    if (value) {
+      result += `✅ ${label}: ${value}\n`;
+      filled++;
+    } else {
+      result += `❌ ${label}: ?\n`;
+    }
+  }
+
+  return {
+    text: result,
+    filled,
+    total: requiredFields.length,
+    progressBar: createProgressBar(filled, requiredFields.length)
+  };
+}
+```
+
+### LLM Кэширование
+
+```javascript
+// Code Node: Check LLM Cache
+const crypto = require('crypto');
+
+const message = $input.item.json.message.text;
+const messageHash = crypto.createHash('md5').update(message).digest('hex');
+
+// Проверяем кэш в Supabase
+const cacheResult = await $('Supabase').query(
+  `SELECT get_llm_cache('${messageHash}') as cached_result`
+);
+
+if (cacheResult && cacheResult.cached_result) {
+  return {
+    json: {
+      fromCache: true,
+      result: cacheResult.cached_result,
+      messageHash
+    }
+  };
+}
+
+return {
+  json: {
+    fromCache: false,
+    messageHash,
+    message
+  }
+};
+```
+
+```javascript
+// Code Node: Save to LLM Cache (после успешного LLM запроса)
+const messageHash = $input.item.json.messageHash;
+const messageText = $input.item.json.message;
+const llmResult = $input.item.json.llmResult;
+
+await $('Supabase').query(
+  `SELECT set_llm_cache('${messageHash}', $1, $2, 24)`,
+  [messageText, JSON.stringify(llmResult)]
+);
+
+return $input.item;
+```
 
 ---
 
 ## Workflow 1: Message Router
 
 ### Описание
-Принимает все входящие сообщения из Telegram, определяет тип и направляет на обработку.
+Принимает все входящие сообщения и callback_query из Telegram, определяет тип и направляет на обработку.
 
-### Структура нод
+### Структура нод (v2.0)
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Telegram   │────▶│   Filter    │────▶│  Check      │
-│  Trigger    │     │  Groups     │     │  Redis      │
-└─────────────┘     └─────────────┘     │  State      │
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Telegram   │────▶│   Filter    │────▶│  Message    │────▶│  Check      │
+│  Trigger    │     │  Groups     │     │  Type       │     │  Redis      │
+└─────────────┘     └─────────────┘     └──────┬──────┘     │  State      │
+                                               │            └──────┬──────┘
+                    ┌──────────────────────────┤                   │
+                    ▼                          ▼                   │
+             ┌─────────────┐            ┌─────────────┐            │
+             │  Callback   │            │  Text       │            │
+             │  Handler    │            │  Message    │◀───────────┘
+             └──────┬──────┘            └──────┬──────┘
+                    │                          │
+                    ▼                          ▼
+             ┌─────────────┐            ┌─────────────┐
+             │  Process    │            │  Classify   │
+             │  Button     │            │  Message    │
+             │  Click      │            │  (Heuristics│
+             └─────────────┘            │  + LLM)     │
                                         └──────┬──────┘
                                                │
-                          ┌────────────────────┴────────────────────┐
-                          ▼                                         ▼
-                   ┌─────────────┐                           ┌─────────────┐
-                   │  Has Active │                           │  No Active  │
-                   │  Dialog     │                           │  Dialog     │
-                   └──────┬──────┘                           └──────┬──────┘
-                          │                                         │
-                          ▼                                         ▼
-                   ┌─────────────┐                           ┌─────────────┐
-                   │  Route to   │                           │  Classify   │
-                   │  Handler    │                           │  Message    │
-                   └─────────────┘                           └──────┬──────┘
-                                                                    │
-                                              ┌─────────────────────┼─────────────────────┐
-                                              ▼                     ▼                     ▼
-                                       ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-                                       │  Candidate  │       │  Payment    │       │  Ignore     │
-                                       │  Webhook    │       │  Webhook    │       │  (chat)     │
-                                       └─────────────┘       └─────────────┘       └─────────────┘
+              ┌────────────────┬───────────────┼───────────────┬────────────────┐
+              ▼                ▼               ▼               ▼                ▼
+       ┌─────────────┐  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+       │  Candidate  │  │  Payment    │ │  Command    │ │  Status     │ │  Ignore     │
+       │  Webhook    │  │  Webhook    │ │  Handler    │ │  Handler    │ │  (chat)     │
+       └─────────────┘  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘
 ```
 
 ### Детальное описание нод
@@ -54,45 +193,107 @@
 Type: Telegram Trigger
 Settings:
   Bot Token: "{{ $env.TELEGRAM_BOT_TOKEN }}"
-  Updates: ["message"]
+  Updates: ["message", "callback_query"]  # Добавлены callback_query для inline-кнопок
 Output:
-  - message.chat.id
-  - message.from.id
-  - message.from.username
-  - message.text
-  - message.message_id
+  - message | callback_query
 ```
 
 #### 1.2 Filter Groups (IF Node)
 ```yaml
 Type: IF
 Condition:
-  - message.chat.id == $env.TELEGRAM_CHAT_CANDIDATES
-  - OR message.chat.id == $env.TELEGRAM_CHAT_PAYMENTS
+  - $json.message?.chat?.id == $env.TELEGRAM_CHAT_CANDIDATES
+  - OR $json.message?.chat?.id == $env.TELEGRAM_CHAT_PAYMENTS
+  - OR $json.callback_query?.message?.chat?.id == $env.TELEGRAM_CHAT_CANDIDATES
+  - OR $json.callback_query?.message?.chat?.id == $env.TELEGRAM_CHAT_PAYMENTS
 True Branch: Continue
-False Branch: Stop (ignore messages from other chats)
+False Branch: Stop
 ```
 
-#### 1.3 Check Redis State
+#### 1.3 Message Type (Switch Node)
 ```yaml
-Type: Redis
-Operation: Get
-Key: "dialog:{{ $json.message.chat.id }}:{{ $json.message.from.id }}"
-Output:
-  - state (JSON or null)
+Type: Switch
+Rules:
+  - callback_query exists → Callback Handler
+  - message.text starts with "/" → Command Handler
+  - Otherwise → Text Message Handler
 ```
 
-#### 1.4 Has Active Dialog (IF Node)
-```yaml
-Type: IF
-Condition: $json.state != null
-True Branch: Route to existing handler
-False Branch: Classify new message
-```
-
-#### 1.5 Classify Message (Code Node)
+#### 1.4 Callback Handler (Code Node)
 ```javascript
-// Классификация сообщения на основе эвристик
+// Обработка нажатий inline-кнопок
+const callback = $input.item.json.callback_query;
+const data = callback.data;
+const chatId = callback.message.chat.id;
+const messageId = callback.message.message_id;
+const userId = callback.from.id;
+const username = callback.from.username;
+
+// Парсим callback_data
+const [action, ...params] = data.split('_');
+
+let result = {
+  action,
+  params: params.join('_'),
+  chatId,
+  messageId,
+  userId,
+  username,
+  originalMessage: callback.message
+};
+
+// Отвечаем на callback чтобы убрать "часики"
+// (делается через отдельную Telegram ноду)
+
+return { json: result };
+```
+
+#### 1.5 Process Button Click (Switch Node)
+```yaml
+Type: Switch
+Rules:
+  - action == "confirm" → Confirmation Handler
+  - action == "status" → Status Change Webhook
+  - action == "edit" → Edit Handler
+  - action == "cancel" → Cancel Handler
+  - action == "duplicate" → Duplicate Handler
+  - action == "report" → Report Handler
+```
+
+#### 1.6 Command Handler (Code Node)
+```javascript
+// Обработка команд /report, /status, /export и т.д.
+const message = $input.item.json.message;
+const text = message.text || '';
+const chatId = message.chat.id;
+
+// Парсим команду
+const commandMatch = text.match(/^\/(\w+)(?:\s+(.*))?$/);
+
+if (!commandMatch) {
+  return { json: { command: null, isCommand: false } };
+}
+
+const command = commandMatch[1].toLowerCase();
+const args = commandMatch[2] ? commandMatch[2].trim() : '';
+
+return {
+  json: {
+    isCommand: true,
+    command,
+    args,
+    message,
+    chatId,
+    userId: message.from.id,
+    username: message.from.username
+  }
+};
+```
+
+#### 1.7 Classify Message (Code Node) - ОБНОВЛЕНО
+```javascript
+// Классификация сообщения с кэшированием
+const crypto = require('crypto');
 const message = $input.item.json.message;
 const text = message.text || '';
 const chatId = message.chat.id;
@@ -100,11 +301,16 @@ const chatId = message.chat.id;
 const CHAT_CANDIDATES = parseInt($env.TELEGRAM_CHAT_CANDIDATES);
 const CHAT_PAYMENTS = parseInt($env.TELEGRAM_CHAT_PAYMENTS);
 
+// Быстрые проверки команд
+if (text.startsWith('/')) {
+  return { json: { ...message, classification: { type: 'command' } } };
+}
+
 // Эвристики
 let candidateScore = 0;
 let paymentScore = 0;
 
-// Группа уже определяет контекст
+// Группа определяет контекст
 if (chatId === CHAT_CANDIDATES) {
   candidateScore += 30;
 } else if (chatId === CHAT_PAYMENTS) {
@@ -117,13 +323,13 @@ if (phoneRegex.test(text)) {
   candidateScore += 30;
 }
 
-// Проверка на возраст ("лет", "год")
+// Проверка на возраст
 const ageRegex = /\d{1,2}\s*(лет|год|года)/i;
 if (ageRegex.test(text)) {
   candidateScore += 20;
 }
 
-// Проверка на дату в начале (dd.mm)
+// Проверка на дату в начале
 const dateRegex = /^\d{1,2}\.\d{1,2}/;
 if (dateRegex.test(text.trim())) {
   paymentScore += 40;
@@ -135,7 +341,7 @@ if (hoursRegex.test(text)) {
   paymentScore += 30;
 }
 
-// Проверка на структуру "ФИО число" в строках
+// Проверка на структуру "ФИО число"
 const lines = text.split('\n');
 const employeeLineRegex = /^[А-Яа-яЁё]+\s+[А-Яа-яЁё]*\s*\d+$/;
 const hasEmployeeLines = lines.filter(l => employeeLineRegex.test(l.trim())).length >= 1;
@@ -154,8 +360,9 @@ if (hasPosition) {
 }
 
 // Определяем тип
-let messageType = 'chat'; // по умолчанию игнорируем
+let messageType = 'chat';
 let confidence = 0;
+let needsLLM = false;
 
 if (candidateScore > paymentScore && candidateScore >= 40) {
   messageType = 'candidate';
@@ -164,173 +371,119 @@ if (candidateScore > paymentScore && candidateScore >= 40) {
   messageType = 'payment';
   confidence = Math.min(paymentScore, 100);
 } else if (candidateScore >= 30 || paymentScore >= 30) {
-  // Низкая уверенность - нужен LLM
   messageType = 'uncertain';
   confidence = Math.max(candidateScore, paymentScore);
+  needsLLM = true;
 }
+
+// Генерируем хэш для кэширования LLM
+const messageHash = crypto.createHash('md5').update(text).digest('hex');
 
 return {
   json: {
     ...message,
     classification: {
       type: messageType,
-      confidence: confidence,
-      candidateScore: candidateScore,
-      paymentScore: paymentScore,
-      needsLLM: messageType === 'uncertain'
+      confidence,
+      candidateScore,
+      paymentScore,
+      needsLLM,
+      messageHash
     }
   }
 };
 ```
 
-#### 1.6 LLM Classification (HTTP Request - если needsLLM)
-```yaml
-Type: HTTP Request
-Method: POST
-URL: "https://api.deepseek.com/v1/chat/completions"
-Headers:
-  Authorization: "Bearer {{ $env.DEEPSEEK_API_KEY }}"
-  Content-Type: "application/json"
-Body:
-  model: "deepseek-chat"
-  temperature: 0.1
-  max_tokens: 100
-  messages:
-    - role: "system"
-      content: |
-        Классифицируй сообщение из HR-группы.
-        Ответь ТОЛЬКО одним словом: candidate, payment, или chat.
-
-        candidate - информация о новом кандидате на работу (ФИО, возраст, телефон, должность)
-        payment - данные об отработанных часах сотрудников (дата, объект, часы)
-        chat - обычное сообщение, не относящееся к HR-данным
-    - role: "user"
-      content: "{{ $json.text }}"
-```
-
-#### 1.7 Route to Handler (Switch Node)
-```yaml
-Type: Switch
-Rules:
-  - Value: "{{ $json.classification.type }}"
-    Outputs:
-      "candidate": → Candidate Webhook
-      "payment": → Payment Webhook
-      "chat": → No Operation (ignore)
-```
-
-#### 1.8 Candidate/Payment Webhooks
-```yaml
-Type: HTTP Request
-Method: POST
-URL: "http://localhost:5678/webhook/candidate-processor" # или payment-processor
-Body: Full message JSON + classification
-```
-
 ---
 
-## Workflow 2: Candidate Processor
+## Workflow 2: Candidate Processor (v2.0)
 
 ### Описание
-Обрабатывает данные кандидатов, использует LLM для извлечения полей.
+Обрабатывает данные кандидатов с:
+- LLM кэшированием
+- Проверкой дубликатов
+- Прогресс-баром заполнения
+- Inline-кнопками подтверждения
 
-### Структура нод
+### Структура нод (v2.0)
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Webhook    │────▶│  Get Redis  │────▶│  Merge      │────▶│  DeepSeek   │
-│  Trigger    │     │  State      │     │  Context    │     │  Parse      │
+│  Webhook    │────▶│  Get Redis  │────▶│  Check LLM  │────▶│  LLM Parse  │
+│  Trigger    │     │  State      │     │  Cache      │     │  or Cache   │
 └─────────────┘     └─────────────┘     └─────────────┘     └──────┬──────┘
                                                                    │
-                                              ┌────────────────────┴────────────────────┐
-                                              ▼                                         ▼
-                                       ┌─────────────┐                           ┌─────────────┐
-                                       │  Complete   │                           │  Incomplete │
-                                       │  Data       │                           │  Data       │
-                                       └──────┬──────┘                           └──────┬──────┘
-                                              │                                         │
-                                              ▼                                         ▼
-                                       ┌─────────────┐                           ┌─────────────┐
-                                       │  Supabase   │                           │  Save to    │
-                                       │  Insert     │                           │  Redis      │
-                                       └──────┬──────┘                           └──────┬──────┘
-                                              │                                         │
-                                              ▼                                         ▼
-                                       ┌─────────────┐                           ┌─────────────┐
-                                       │  Clear      │                           │  Telegram   │
-                                       │  Redis      │                           │  Ask More   │
-                                       └──────┬──────┘                           └─────────────┘
-                                              │
-                                              ▼
-                                       ┌─────────────┐
-                                       │  Telegram   │
-                                       │  Confirm    │
-                                       └─────────────┘
+                                                                   ▼
+                                                            ┌─────────────┐
+                                                            │  Check      │
+                                                            │  Duplicates │
+                                                            └──────┬──────┘
+                                                                   │
+                                              ┌────────────────────┼────────────────────┐
+                                              ▼                    ▼                    ▼
+                                       ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+                                       │  Has        │      │  Complete   │      │  Incomplete │
+                                       │  Duplicate  │      │  Data       │      │  Data       │
+                                       └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
+                                              │                    │                    │
+                                              ▼                    ▼                    ▼
+                                       ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+                                       │  Telegram   │      │  Telegram   │      │  Telegram   │
+                                       │  Ask        │      │  Confirm    │      │  Ask More   │
+                                       │  Duplicate  │      │  Preview    │      │  + Progress │
+                                       │  (buttons)  │      │  (buttons)  │      │  (buttons)  │
+                                       └─────────────┘      └─────────────┘      └─────────────┘
 ```
 
 ### Детальное описание нод
 
-#### 2.1 Webhook Trigger
-```yaml
-Type: Webhook
-Method: POST
-Path: /candidate-processor
-Authentication: None (internal only)
-```
-
-#### 2.2 Get Redis State
-```yaml
-Type: Redis
-Operation: Get
-Key: "dialog:{{ $json.chat.id }}:{{ $json.from.id }}"
-```
-
-#### 2.3 Merge Context (Code Node)
+#### 2.1 Check LLM Cache (Code Node)
 ```javascript
-const message = $input.item.json;
-const existingState = $('Get Redis State').item?.json || null;
+const crypto = require('crypto');
+const message = $input.item.json.message;
+const context = $input.item.json.context;
 
-let context = {
-  messages: [],
-  collectedData: {
-    full_name: null,
-    age: null,
-    gender: null,
-    position: null,
-    experience: null,
-    phone: null,
-    object_location: null
-  }
-};
-
-if (existingState && existingState.value) {
-  const state = JSON.parse(existingState.value);
-  context = state;
-}
-
-// Добавляем новое сообщение
-context.messages.push({
-  role: 'user',
-  content: message.text,
-  timestamp: new Date().toISOString()
+// Генерируем ключ кэша на основе сообщения + контекста
+const cacheKey = JSON.stringify({
+  text: message.text,
+  existingData: context.collectedData
 });
+const messageHash = crypto.createHash('md5').update(cacheKey).digest('hex');
 
 return {
   json: {
-    message: message,
-    context: context
+    message,
+    context,
+    messageHash,
+    checkCache: true
   }
 };
 ```
 
-#### 2.4 DeepSeek Parse (HTTP Request)
+#### 2.2 Supabase Check Cache
+```yaml
+Type: Supabase
+Operation: RPC
+Function: get_llm_cache
+Parameters:
+  p_message_hash: "{{ $json.messageHash }}"
+```
+
+#### 2.3 LLM or Cache (IF + Merge)
+```yaml
+Type: IF
+Condition: $json.cached_result != null
+True: Use cached result
+False: Call DeepSeek API
+```
+
+#### 2.4 DeepSeek Parse (HTTP Request) - ОБНОВЛЕНО
 ```yaml
 Type: HTTP Request
 Method: POST
 URL: "https://api.deepseek.com/v1/chat/completions"
 Headers:
   Authorization: "Bearer {{ $env.DEEPSEEK_API_KEY }}"
-  Content-Type: "application/json"
 Body:
   model: "deepseek-chat"
   temperature: 0.1
@@ -344,9 +497,6 @@ Body:
 
         Ранее собранные данные:
         {{ JSON.stringify($json.context.collectedData) }}
-
-        История диалога:
-        {{ $json.context.messages.map(m => m.role + ': ' + m.content).join('\n') }}
 
         Верни JSON:
         {
@@ -362,59 +512,212 @@ Body:
           "clarification_question": string | null
         }
 
-        Правила:
-        - Объединяй новые данные с ранее собранными
-        - Телефон нормализуй к формату 79XXXXXXXXX (убери +, 8, пробелы, скобки)
-        - Пол определяй по имени, если явно не указан
-        - Возраст может быть указан словами ("тридцать пять" → 35)
-        - is_complete = true только если есть: full_name, phone, position, object_location
-        - Если данных недостаточно, сформулируй краткий вопрос на русском в clarification_question
-        - missing_fields должен содержать названия полей на русском: "ФИО", "телефон", "должность", "объект"
+        ОБЯЗАТЕЛЬНЫЕ поля: full_name, phone, position, object_location
+        Телефон нормализуй к формату 79XXXXXXXXX
     - role: "user"
       content: "{{ $json.message.text }}"
 ```
 
-#### 2.5 Process LLM Response (Code Node)
+#### 2.5 Save to LLM Cache (Supabase RPC)
+```yaml
+Type: Supabase
+Operation: RPC
+Function: set_llm_cache
+Parameters:
+  p_message_hash: "{{ $json.messageHash }}"
+  p_message_text: "{{ $json.message.text }}"
+  p_result: "{{ $json.llmResult }}"
+  p_ttl_hours: 24
+```
+
+#### 2.6 Check Duplicates (Supabase RPC)
+```yaml
+Type: Supabase
+Operation: RPC
+Function: find_candidate_duplicates
+Parameters:
+  p_phone: "{{ $json.collectedData.phone }}"
+  p_full_name: "{{ $json.collectedData.full_name }}"
+  p_days_back: 30
+```
+
+#### 2.7 Process Duplicates (Code Node)
 ```javascript
 const input = $input.item.json;
+const duplicates = input.duplicates || [];
+const collectedData = input.collectedData;
 const message = input.message;
-const llmResponse = JSON.parse($('DeepSeek Parse').item.json.choices[0].message.content);
 
-// Обновляем собранные данные
-const collectedData = {
-  full_name: llmResponse.full_name || input.context.collectedData.full_name,
-  age: llmResponse.age || input.context.collectedData.age,
-  gender: llmResponse.gender || input.context.collectedData.gender,
-  position: llmResponse.position || input.context.collectedData.position,
-  experience: llmResponse.experience || input.context.collectedData.experience,
-  phone: llmResponse.phone || input.context.collectedData.phone,
-  object_location: llmResponse.object_location || input.context.collectedData.object_location
-};
+// Если нашли дубликаты с высоким совпадением
+const highMatchDuplicates = duplicates.filter(d => d.similarity_score >= 90);
+
+if (highMatchDuplicates.length > 0) {
+  const dup = highMatchDuplicates[0];
+
+  return {
+    json: {
+      hasDuplicate: true,
+      duplicate: dup,
+      collectedData,
+      message,
+      // Кнопки для пользователя
+      keyboard: {
+        inline_keyboard: [
+          [
+            { text: '➕ Добавить как новый', callback_data: `duplicate_add_${dup.id}` },
+            { text: '🔗 Обновить существующий', callback_data: `duplicate_update_${dup.id}` }
+          ],
+          [
+            { text: '❌ Отмена', callback_data: 'duplicate_cancel' }
+          ]
+        ]
+      },
+      duplicateMessage: `⚠️ Найден похожий кандидат (совпадение ${dup.similarity_score}%):\n\n` +
+        `👤 ${dup.full_name}\n` +
+        `📞 ${dup.phone}\n` +
+        `💼 ${dup.position}\n` +
+        `📍 ${dup.object_location}\n` +
+        `📊 Статус: ${dup.status}\n` +
+        `📅 Добавлен: ${new Date(dup.created_at).toLocaleDateString('ru-RU')}\n\n` +
+        `Что сделать?`
+    }
+  };
+}
 
 return {
   json: {
-    message: message,
-    collectedData: collectedData,
-    isComplete: llmResponse.is_complete,
-    missingFields: llmResponse.missing_fields || [],
-    clarificationQuestion: llmResponse.clarification_question,
-    context: {
-      ...input.context,
-      collectedData: collectedData
-    }
+    hasDuplicate: false,
+    collectedData,
+    message
   }
 };
 ```
 
-#### 2.6 Is Complete (IF Node)
-```yaml
-Type: IF
-Condition: $json.isComplete == true
-True Branch: → Supabase Insert
-False Branch: → Save to Redis & Ask More
+#### 2.8 Build Progress Message (Code Node)
+```javascript
+const input = $input.item.json;
+const data = input.collectedData;
+const isComplete = input.isComplete;
+const missingFields = input.missingFields || [];
+
+const requiredFields = ['full_name', 'phone', 'position', 'object_location'];
+const optionalFields = ['age', 'gender', 'experience'];
+
+const fieldLabels = {
+  full_name: 'ФИО',
+  phone: 'Телефон',
+  position: 'Должность',
+  object_location: 'Объект',
+  age: 'Возраст',
+  gender: 'Пол',
+  experience: 'Опыт'
+};
+
+// Считаем заполненность
+let filledRequired = 0;
+let totalRequired = requiredFields.length;
+
+let statusText = '📋 *Данные кандидата*\n\n';
+
+// Обязательные поля
+statusText += '*Обязательные:*\n';
+for (const field of requiredFields) {
+  const value = data[field];
+  if (value) {
+    statusText += `✅ ${fieldLabels[field]}: ${value}\n`;
+    filledRequired++;
+  } else {
+    statusText += `❌ ${fieldLabels[field]}: _не указано_\n`;
+  }
+}
+
+// Опциональные поля
+statusText += '\n*Дополнительные:*\n';
+for (const field of optionalFields) {
+  const value = data[field];
+  if (value) {
+    statusText += `✅ ${fieldLabels[field]}: ${value}\n`;
+  } else {
+    statusText += `⬜ ${fieldLabels[field]}: _не указано_\n`;
+  }
+}
+
+// Прогресс-бар
+const progress = Math.round((filledRequired / totalRequired) * 100);
+const filledBlocks = Math.round(progress / 10);
+const progressBar = '█'.repeat(filledBlocks) + '░'.repeat(10 - filledBlocks);
+statusText += `\n📊 Заполнено: [${progressBar}] ${progress}%`;
+
+// Кнопки
+let keyboard;
+if (isComplete) {
+  keyboard = {
+    inline_keyboard: [
+      [
+        { text: '✅ Сохранить', callback_data: 'confirm_yes' },
+        { text: '✏️ Изменить', callback_data: 'confirm_edit' }
+      ],
+      [
+        { text: '❌ Отмена', callback_data: 'confirm_cancel' }
+      ]
+    ]
+  };
+} else {
+  // Кнопки для недостающих полей
+  const fieldButtons = missingFields.slice(0, 4).map(field => ({
+    text: `➕ ${field}`,
+    callback_data: `add_field_${field.toLowerCase()}`
+  }));
+
+  keyboard = {
+    inline_keyboard: [
+      fieldButtons.slice(0, 2),
+      fieldButtons.slice(2, 4),
+      [{ text: '❌ Отмена', callback_data: 'confirm_cancel' }]
+    ].filter(row => row.length > 0)
+  };
+}
+
+return {
+  json: {
+    ...input,
+    statusText,
+    keyboard,
+    progress,
+    clarificationQuestion: input.clarificationQuestion
+  }
+};
 ```
 
-#### 2.7 Supabase Insert (Complete branch)
+#### 2.9 Telegram Ask More with Progress
+```yaml
+Type: Telegram
+Operation: Send Message
+Chat ID: "{{ $json.message.chat.id }}"
+Text: |
+  {{ $json.statusText }}
+
+  {{ $json.clarificationQuestion }}
+Parse Mode: Markdown
+Reply Markup: "{{ JSON.stringify($json.keyboard) }}"
+Reply To Message ID: "{{ $json.message.message_id }}"
+```
+
+#### 2.10 Telegram Confirm Preview (Complete branch)
+```yaml
+Type: Telegram
+Operation: Send Message
+Chat ID: "{{ $json.message.chat.id }}"
+Text: |
+  {{ $json.statusText }}
+
+  ✅ Все обязательные поля заполнены!
+  Проверьте данные и подтвердите сохранение.
+Parse Mode: Markdown
+Reply Markup: "{{ JSON.stringify($json.keyboard) }}"
+```
+
+#### 2.11 Supabase Insert (после подтверждения)
 ```yaml
 Type: Supabase
 Operation: Insert
@@ -427,443 +730,642 @@ Row:
   experience: "{{ $json.collectedData.experience }}"
   phone: "{{ $json.collectedData.phone }}"
   object_location: "{{ $json.collectedData.object_location }}"
+  status: "направлен"
   telegram_user_id: "{{ $json.message.from.id }}"
   telegram_username: "{{ $json.message.from.username }}"
   telegram_chat_id: "{{ $json.message.chat.id }}"
   telegram_message_id: "{{ $json.message.message_id }}"
 ```
 
-#### 2.8 Clear Redis (Complete branch)
-```yaml
-Type: Redis
-Operation: Delete
-Key: "dialog:{{ $json.message.chat.id }}:{{ $json.message.from.id }}"
-```
-
-#### 2.9 Telegram Confirm (Complete branch)
+#### 2.12 Telegram Final Confirm
 ```yaml
 Type: Telegram
-Operation: Send Message
+Operation: Edit Message Text  # Редактируем сообщение с превью
 Chat ID: "{{ $json.message.chat.id }}"
-Text: "✅ Данные внесены\n\n👤 {{ $json.collectedData.full_name }}\n📞 {{ $json.collectedData.phone }}\n💼 {{ $json.collectedData.position }}\n📍 {{ $json.collectedData.object_location }}"
-Reply To Message ID: "{{ $json.message.message_id }}"
-```
+Message ID: "{{ $json.confirmMessageId }}"
+Text: |
+  ✅ *Кандидат добавлен!*
 
-#### 2.10 Save to Redis (Incomplete branch)
-```yaml
-Type: Redis
-Operation: Set
-Key: "dialog:{{ $json.message.chat.id }}:{{ $json.message.from.id }}"
-Value: "{{ JSON.stringify($json.context) }}"
-TTL: 86400  # 24 часа
-```
+  👤 {{ $json.collectedData.full_name }}
+  📞 {{ $json.collectedData.phone }}
+  💼 {{ $json.collectedData.position }}
+  📍 {{ $json.collectedData.object_location }}
+  📊 Статус: направлен
 
-#### 2.11 Telegram Ask More (Incomplete branch)
-```yaml
-Type: Telegram
-Operation: Send Message
-Chat ID: "{{ $json.message.chat.id }}"
-Text: "{{ $json.clarificationQuestion }}"
-Reply To Message ID: "{{ $json.message.message_id }}"
+  ID: `{{ $json.insertedId }}`
+Parse Mode: Markdown
+Reply Markup: |
+  {
+    "inline_keyboard": [
+      [
+        { "text": "📋 Изменить статус", "callback_data": "status_change_{{ $json.insertedId }}" }
+      ]
+    ]
+  }
 ```
 
 ---
 
-## Workflow 3: Payment Processor
+## Workflow 3: Payment Processor (v2.0)
 
 ### Описание
-Обрабатывает данные об оплате с использованием regex-парсинга.
+Обрабатывает данные об оплате с:
+- Batch insert (одним запросом)
+- Автоматической линковкой с кандидатами
+- Inline-кнопками подтверждения
 
-### Структура нод
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Webhook    │────▶│  Get Redis  │────▶│  Regex      │
-│  Trigger    │     │  State      │     │  Parse      │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                                              ┌┴┐
-                                              │?│ Валидация
-                                              └┬┘
-                          ┌────────────────────┴────────────────────┐
-                          ▼                                         ▼
-                   ┌─────────────┐                           ┌─────────────┐
-                   │  Valid      │                           │  Invalid    │
-                   │  Data       │                           │  Data       │
-                   └──────┬──────┘                           └──────┬──────┘
-                          │                                         │
-                          ▼                                         ▼
-                   ┌─────────────┐                           ┌─────────────┐
-                   │  Split      │                           │  Ask        │
-                   │  Employees  │                           │  Correction │
-                   └──────┬──────┘                           └─────────────┘
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │  Supabase   │
-                   │  Insert     │
-                   │  (batch)    │
-                   └──────┬──────┘
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │  Telegram   │
-                   │  Confirm    │
-                   └─────────────┘
-```
-
-### Детальное описание нод
-
-#### 3.1 Webhook Trigger
-```yaml
-Type: Webhook
-Method: POST
-Path: /payment-processor
-Authentication: None (internal only)
-```
-
-#### 3.2 Get Redis State
-```yaml
-Type: Redis
-Operation: Get
-Key: "dialog:{{ $json.chat.id }}:{{ $json.from.id }}"
-```
-
-#### 3.3 Regex Parse (Code Node)
+### Batch Processing (Code Node)
 ```javascript
-const message = $input.item.json;
-const existingState = $('Get Redis State').item?.json?.value
-  ? JSON.parse($('Get Redis State').item.json.value)
-  : null;
+// Подготовка batch insert для всех сотрудников
+const input = $input.item.json;
+const parsed = input.parsed;
+const message = input.message;
 
-const text = message.text || '';
-const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-
-let result = {
-  workDate: existingState?.workDate || null,
-  objectLocation: existingState?.objectLocation || null,
-  position: existingState?.position || null,
-  employees: existingState?.employees || [],
-  isComplete: false,
-  errors: [],
-  rawLines: lines
-};
-
-// Паттерны
-const datePattern = /^(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?$/;
-const employeePattern = /^(.+?)\s+(\d+(?:[.,]\d+)?)\s*$/;
-
-// Известные должности
-const positions = ['горничная', 'уборщица', 'охранник', 'администратор',
-                   'повар', 'официант', 'бармен', 'кассир', 'продавец',
-                   'менеджер', 'водитель'];
-
-let lineIndex = 0;
-
-// Парсим дату (если ещё нет)
-if (!result.workDate && lines[lineIndex]) {
-  const dateMatch = lines[lineIndex].match(datePattern);
-  if (dateMatch) {
-    const day = dateMatch[1].padStart(2, '0');
-    const month = dateMatch[2].padStart(2, '0');
-    const year = dateMatch[3] || new Date().getFullYear();
-    result.workDate = `${year}-${month}-${day}`;
-    lineIndex++;
-  }
-}
-
-// Парсим объект (если ещё нет)
-if (!result.objectLocation && lines[lineIndex]) {
-  // Если строка не похожа на дату и не на сотрудника
-  if (!datePattern.test(lines[lineIndex]) &&
-      !employeePattern.test(lines[lineIndex])) {
-    result.objectLocation = lines[lineIndex];
-    lineIndex++;
-  }
-}
-
-// Парсим должность (если ещё нет)
-if (!result.position && lines[lineIndex]) {
-  const lowerLine = lines[lineIndex].toLowerCase();
-  if (positions.some(p => lowerLine.includes(p))) {
-    result.position = lines[lineIndex];
-    lineIndex++;
-  } else if (!employeePattern.test(lines[lineIndex])) {
-    // Предполагаем, что это должность
-    result.position = lines[lineIndex];
-    lineIndex++;
-  }
-}
-
-// Парсим сотрудников
-for (let i = lineIndex; i < lines.length; i++) {
-  const match = lines[i].match(employeePattern);
-  if (match) {
-    result.employees.push({
-      fullName: match[1].trim(),
-      hours: parseFloat(match[2].replace(',', '.'))
-    });
-  } else if (lines[i]) {
-    result.errors.push(`Не удалось распознать строку: "${lines[i]}"`);
-  }
-}
-
-// Проверка полноты
-const missingFields = [];
-if (!result.workDate) missingFields.push('дата');
-if (!result.objectLocation) missingFields.push('объект');
-if (!result.position) missingFields.push('должность');
-if (result.employees.length === 0) missingFields.push('сотрудники (ФИО и часы)');
-
-result.isComplete = missingFields.length === 0;
-result.missingFields = missingFields;
-
-// Формируем вопрос
-if (!result.isComplete) {
-  result.clarificationQuestion = `Не хватает данных: ${missingFields.join(', ')}.\n\nОжидаемый формат:\nДата\nОбъект\nДолжность\nФИО часы`;
-}
+// Формируем массив записей для batch insert
+const records = parsed.employees.map(emp => ({
+  work_date: parsed.workDate,
+  object_location: parsed.objectLocation,
+  position: parsed.position,
+  full_name: emp.fullName,
+  hours: emp.hours,
+  telegram_user_id: message.from.id,
+  telegram_username: message.from.username,
+  telegram_chat_id: message.chat.id,
+  telegram_message_id: message.message_id
+}));
 
 return {
   json: {
-    message: message,
-    parsed: result,
-    context: result
+    records,
+    summary: {
+      date: parsed.workDate,
+      object: parsed.objectLocation,
+      position: parsed.position,
+      employeesCount: records.length,
+      totalHours: records.reduce((sum, r) => sum + r.hours, 0)
+    },
+    message
   }
 };
 ```
 
-#### 3.4 Is Valid (IF Node)
-```yaml
-Type: IF
-Condition: $json.parsed.isComplete == true
-True Branch: → Split Employees
-False Branch: → Save Redis & Ask Correction
-```
-
-#### 3.5 Split Employees (Split In Batches)
-```yaml
-Type: Split In Batches
-Input: $json.parsed.employees
-Batch Size: 1
-```
-
-#### 3.6 Supabase Insert (Loop)
+### Supabase Batch Insert
 ```yaml
 Type: Supabase
 Operation: Insert
 Table: payments
-Row:
-  work_date: "{{ $('Regex Parse').item.json.parsed.workDate }}"
-  object_location: "{{ $('Regex Parse').item.json.parsed.objectLocation }}"
-  position: "{{ $('Regex Parse').item.json.parsed.position }}"
-  full_name: "{{ $json.fullName }}"
-  hours: "{{ $json.hours }}"
-  telegram_user_id: "{{ $('Regex Parse').item.json.message.from.id }}"
-  telegram_username: "{{ $('Regex Parse').item.json.message.from.username }}"
-  telegram_chat_id: "{{ $('Regex Parse').item.json.message.chat.id }}"
-  telegram_message_id: "{{ $('Regex Parse').item.json.message.message_id }}"
+Rows: "{{ $json.records }}"  # Массив записей
 ```
 
-#### 3.7 Clear Redis
+### Link Payments to Candidates (Supabase RPC)
 ```yaml
-Type: Redis
-Operation: Delete
-Key: "dialog:{{ $json.message.chat.id }}:{{ $json.message.from.id }}"
+Type: Supabase
+Operation: RPC
+Function: link_all_unlinked_payments
+# Вызывается после batch insert
 ```
 
-#### 3.8 Telegram Confirm
+### Telegram Confirm with Summary
 ```yaml
 Type: Telegram
 Operation: Send Message
 Chat ID: "{{ $json.message.chat.id }}"
 Text: |
-  ✅ Оплата записана
+  ✅ *Оплата записана*
 
-  📅 {{ $json.parsed.workDate }}
-  📍 {{ $json.parsed.objectLocation }}
-  💼 {{ $json.parsed.position }}
-  👥 Сотрудников: {{ $json.parsed.employees.length }}
-  ⏱ Всего часов: {{ $json.parsed.employees.reduce((sum, e) => sum + e.hours, 0) }}
-Reply To Message ID: "{{ $json.message.message_id }}"
-```
+  📅 Дата: {{ $json.summary.date }}
+  📍 Объект: {{ $json.summary.object }}
+  💼 Должность: {{ $json.summary.position }}
 
-#### 3.9 Save Redis (Invalid branch)
-```yaml
-Type: Redis
-Operation: Set
-Key: "dialog:{{ $json.message.chat.id }}:{{ $json.message.from.id }}"
-Value: "{{ JSON.stringify({ type: 'payment', ...($json.context) }) }}"
-TTL: 86400
-```
+  👥 Сотрудников: {{ $json.summary.employeesCount }}
+  ⏱ Всего часов: {{ $json.summary.totalHours }}
 
-#### 3.10 Telegram Ask Correction
-```yaml
-Type: Telegram
-Operation: Send Message
-Chat ID: "{{ $json.message.chat.id }}"
-Text: "{{ $json.parsed.clarificationQuestion }}"
+  _Записи автоматически связаны с кандидатами (если найдены)_
+Parse Mode: Markdown
 Reply To Message ID: "{{ $json.message.message_id }}"
 ```
 
 ---
 
-## Workflow 4: Daily Report
+## Workflow 5: Custom Reports
 
 ### Описание
-Отправляет ежедневный отчёт о добавленных кандидатах в 22:00 MSK.
+Обработка команд для генерации кастомных отчётов.
+
+### Поддерживаемые команды
+```
+/report today          - Отчёт за сегодня
+/report week           - Отчёт за неделю
+/report month          - Отчёт за месяц
+/report 01.01-31.01    - Отчёт за период
+/stats                 - Статистика воронки
+/stats recruiters      - Статистика по рекрутерам
+/export candidates     - Экспорт кандидатов в Excel
+/export payments week  - Экспорт оплат за неделю
+```
+
+### Структура нод
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Command    │────▶│  Parse      │────▶│  Switch by  │
+│  Trigger    │     │  Command    │     │  Command    │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+         ┌─────────────┬───────────────┬───────┴───────┬─────────────┐
+         ▼             ▼               ▼               ▼             ▼
+  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+  │  Report     │ │  Stats      │ │  Export     │ │  Status     │ │  Unknown    │
+  │  Handler    │ │  Handler    │ │  Handler    │ │  Handler    │ │  Command    │
+  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+### Parse Command (Code Node)
+```javascript
+const input = $input.item.json;
+const command = input.command;
+const args = input.args;
+
+let result = {
+  command,
+  reportType: null,
+  startDate: null,
+  endDate: null,
+  groupBy: null,
+  exportFormat: 'text'
+};
+
+// Парсим аргументы
+const today = new Date();
+const formatDate = (d) => d.toISOString().split('T')[0];
+
+switch (command) {
+  case 'report':
+    if (args === 'today' || !args) {
+      result.reportType = 'candidates';
+      result.startDate = formatDate(today);
+      result.endDate = formatDate(today);
+    } else if (args === 'week') {
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      result.reportType = 'candidates';
+      result.startDate = formatDate(weekAgo);
+      result.endDate = formatDate(today);
+    } else if (args === 'month') {
+      const monthAgo = new Date(today);
+      monthAgo.setMonth(monthAgo.getMonth() - 1);
+      result.reportType = 'candidates';
+      result.startDate = formatDate(monthAgo);
+      result.endDate = formatDate(today);
+    } else {
+      // Парсим диапазон дат dd.mm-dd.mm
+      const dateRangeMatch = args.match(/(\d{1,2})\.(\d{1,2})-(\d{1,2})\.(\d{1,2})/);
+      if (dateRangeMatch) {
+        const year = today.getFullYear();
+        result.reportType = 'candidates';
+        result.startDate = `${year}-${dateRangeMatch[2].padStart(2,'0')}-${dateRangeMatch[1].padStart(2,'0')}`;
+        result.endDate = `${year}-${dateRangeMatch[4].padStart(2,'0')}-${dateRangeMatch[3].padStart(2,'0')}`;
+      }
+    }
+    break;
+
+  case 'stats':
+    result.reportType = args === 'recruiters' ? 'recruiter_stats' : 'funnel_stats';
+    result.startDate = formatDate(new Date(today.setDate(today.getDate() - 30)));
+    result.endDate = formatDate(new Date());
+    break;
+
+  case 'export':
+    result.exportFormat = 'excel';
+    const exportParts = args.split(' ');
+    result.reportType = exportParts[0] || 'candidates';
+    if (exportParts[1] === 'week') {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      result.startDate = formatDate(weekAgo);
+      result.endDate = formatDate(new Date());
+    } else {
+      result.startDate = formatDate(new Date(today.setDate(today.getDate() - 30)));
+      result.endDate = formatDate(new Date());
+    }
+    break;
+}
+
+return { json: { ...input, ...result } };
+```
+
+### Report Handler (Code Node)
+```javascript
+const input = $input.item.json;
+const candidates = input.queryResult || [];
+const startDate = input.startDate;
+const endDate = input.endDate;
+
+const formatDateRu = (dateStr) => {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+};
+
+let report = `📊 *Отчёт по кандидатам*\n`;
+report += `📅 Период: ${formatDateRu(startDate)} — ${formatDateRu(endDate)}\n\n`;
+
+if (candidates.length === 0) {
+  report += `_Кандидатов за указанный период не найдено._`;
+} else {
+  // Группировка по статусам
+  const byStatus = {};
+  candidates.forEach(c => {
+    if (!byStatus[c.status]) byStatus[c.status] = [];
+    byStatus[c.status].push(c);
+  });
+
+  report += `👥 Всего: ${candidates.length}\n\n`;
+
+  // Статистика по статусам
+  const statusEmoji = {
+    'направлен': '📋',
+    'собеседование': '🗣',
+    'оформление': '📝',
+    'работает': '✅',
+    'отказ': '❌',
+    'архив': '📦'
+  };
+
+  for (const [status, list] of Object.entries(byStatus)) {
+    report += `${statusEmoji[status] || '•'} ${status}: ${list.length}\n`;
+  }
+
+  report += `\n*Последние 10 добавленных:*\n`;
+
+  candidates.slice(0, 10).forEach((c, i) => {
+    report += `\n${i + 1}. *${c.full_name}*\n`;
+    report += `   📞 ${c.phone}\n`;
+    report += `   💼 ${c.position} | 📍 ${c.object_location}\n`;
+    report += `   📊 ${c.status}\n`;
+  });
+
+  if (candidates.length > 10) {
+    report += `\n_...и ещё ${candidates.length - 10} кандидат(ов)_`;
+  }
+}
+
+// Кнопки для дополнительных действий
+const keyboard = {
+  inline_keyboard: [
+    [
+      { text: '📥 Экспорт в Excel', callback_data: `export_candidates_${startDate}_${endDate}` }
+    ],
+    [
+      { text: '📊 Статистика воронки', callback_data: 'report_funnel' },
+      { text: '👥 По рекрутерам', callback_data: 'report_recruiters' }
+    ]
+  ]
+};
+
+return {
+  json: {
+    report,
+    keyboard,
+    chatId: input.chatId
+  }
+};
+```
+
+### Stats Handler - Funnel (Code Node)
+```javascript
+const input = $input.item.json;
+const stats = input.funnelStats || [];
+
+let report = `📊 *Воронка найма*\n`;
+report += `📅 Последние 30 дней\n\n`;
+
+const statusEmoji = {
+  'направлен': '📋',
+  'собеседование': '🗣',
+  'оформление': '📝',
+  'работает': '✅',
+  'отказ': '❌',
+  'архив': '📦'
+};
+
+const total = stats.reduce((sum, s) => sum + parseInt(s.count), 0);
+
+stats.forEach(s => {
+  const emoji = statusEmoji[s.status] || '•';
+  const bar = '█'.repeat(Math.round(s.percentage / 5));
+  report += `${emoji} *${s.status}*: ${s.count} (${s.percentage}%)\n`;
+  report += `   ${bar}\n\n`;
+});
+
+report += `\n📈 *Конверсия:*\n`;
+const hired = stats.find(s => s.status === 'работает')?.count || 0;
+const conversionRate = total > 0 ? Math.round((hired / total) * 100) : 0;
+report += `Направлен → Работает: ${conversionRate}%`;
+
+return {
+  json: {
+    report,
+    chatId: input.chatId
+  }
+};
+```
+
+### Recruiter Stats Handler (Code Node)
+```javascript
+const input = $input.item.json;
+const stats = input.recruiterStats || [];
+
+let report = `👥 *Статистика по рекрутерам*\n`;
+report += `📅 Последние 30 дней\n\n`;
+
+if (stats.length === 0) {
+  report += `_Данных нет._`;
+} else {
+  stats.forEach((r, i) => {
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+    report += `${medal} @${r.telegram_username || 'Unknown'}\n`;
+    report += `   📋 Добавлено: ${r.total_candidates}\n`;
+    report += `   ✅ Трудоустроено: ${r.hired_count}\n`;
+    report += `   📈 Конверсия: ${r.conversion_rate}%\n\n`;
+  });
+}
+
+return {
+  json: {
+    report,
+    chatId: input.chatId
+  }
+};
+```
+
+---
+
+## Workflow 6: Excel Export
+
+### Описание
+Генерация и отправка Excel-файлов.
+
+### Generate Excel (Code Node)
+```javascript
+// Используем библиотеку xlsx (нужно установить в n8n)
+const XLSX = require('xlsx');
+
+const input = $input.item.json;
+const data = input.exportData;
+const reportType = input.reportType;
+
+// Подготавливаем данные для Excel
+let worksheetData = [];
+let filename = '';
+
+if (reportType === 'candidates') {
+  filename = `candidates_${input.startDate}_${input.endDate}.xlsx`;
+
+  // Заголовки
+  worksheetData.push([
+    'ФИО', 'Телефон', 'Должность', 'Объект', 'Статус',
+    'Возраст', 'Пол', 'Опыт', 'Рекрутер', 'Дата добавления'
+  ]);
+
+  // Данные
+  data.forEach(c => {
+    worksheetData.push([
+      c.full_name,
+      c.phone,
+      c.position,
+      c.object_location,
+      c.status,
+      c.age || '',
+      c.gender || '',
+      c.experience || '',
+      c.telegram_username || '',
+      new Date(c.created_at).toLocaleDateString('ru-RU')
+    ]);
+  });
+} else if (reportType === 'payments') {
+  filename = `payments_${input.startDate}_${input.endDate}.xlsx`;
+
+  worksheetData.push([
+    'Дата', 'Объект', 'Должность', 'ФИО', 'Часы', 'Рекрутер', 'Дата записи'
+  ]);
+
+  data.forEach(p => {
+    worksheetData.push([
+      p.work_date,
+      p.object_location,
+      p.position,
+      p.full_name,
+      p.hours,
+      p.telegram_username || '',
+      new Date(p.created_at).toLocaleDateString('ru-RU')
+    ]);
+  });
+}
+
+// Создаём workbook
+const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, ws, 'Data');
+
+// Генерируем buffer
+const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+return {
+  json: {
+    filename,
+    chatId: input.chatId
+  },
+  binary: {
+    data: buffer
+  }
+};
+```
+
+### Telegram Send Document
+```yaml
+Type: Telegram
+Operation: Send Document
+Chat ID: "{{ $json.chatId }}"
+Document: Binary data from previous node
+Filename: "{{ $json.filename }}"
+Caption: "📥 Экспорт данных готов!"
+```
+
+---
+
+## Workflow 7: Admin Notifications
+
+### Описание
+Периодическая проверка и отправка уведомлений администратору.
 
 ### Структура нод
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  Schedule   │────▶│  Supabase   │────▶│  Format     │────▶│  Telegram   │
-│  22:00 MSK  │     │  Query      │     │  Report     │     │  Send       │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+│  Every 5min │     │  Get        │     │  Messages   │     │  Send to    │
+└─────────────┘     │  Pending    │     └─────────────┘     │  Admin      │
+                    └─────────────┘                         └─────────────┘
+                                                                   │
+                                                                   ▼
+                                                            ┌─────────────┐
+                                                            │  Mark as    │
+                                                            │  Sent       │
+                                                            └─────────────┘
 ```
 
-### Детальное описание нод
-
-#### 4.1 Schedule Trigger
+### Schedule Trigger
 ```yaml
 Type: Schedule Trigger
-Rule: "0 22 * * *"  # Каждый день в 22:00
-Timezone: "Europe/Moscow"
+Rule: "*/5 * * * *"  # Каждые 5 минут
 ```
 
-#### 4.2 Supabase Query
+### Supabase Get Pending Notifications
 ```yaml
 Type: Supabase
-Operation: Select
-Table: candidates
-Filters:
-  - created_date: eq.{{ new Date().toISOString().split('T')[0] }}
-Order By: created_at ASC
+Operation: RPC
+Function: get_pending_notifications
+Parameters:
+  p_limit: 10
 ```
 
-#### 4.3 Format Report (Code Node)
+### Format Messages (Code Node)
 ```javascript
-const candidates = $input.all();
-const today = new Date().toLocaleDateString('ru-RU', {
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric'
-});
+const notifications = $input.all();
 
-if (candidates.length === 0) {
-  return {
-    json: {
-      report: `📊 Отчёт за ${today}\n\nСегодня кандидатов не добавлено.`,
-      hasData: false
-    }
-  };
+if (notifications.length === 0) {
+  return []; // Нет уведомлений - workflow останавливается
 }
 
-let report = `📊 Отчёт за ${today}\n\n`;
-report += `Добавлено кандидатов: ${candidates.length}\n\n`;
-
-candidates.forEach((item, index) => {
-  const c = item.json;
-  report += `${index + 1}. ${c.full_name}\n`;
-  report += `   📞 ${c.phone}\n`;
-  report += `   💼 ${c.position}\n`;
-  report += `   📍 ${c.object_location}\n\n`;
-});
-
-report += `---\nВсего за сегодня: ${candidates.length} кандидат(ов)`;
-
-return {
-  json: {
-    report: report,
-    hasData: true,
-    count: candidates.length
-  }
+const levelEmoji = {
+  'info': 'ℹ️',
+  'warning': '⚠️',
+  'error': '❌',
+  'critical': '🚨'
 };
+
+return notifications.map(n => {
+  const item = n.json;
+  const emoji = levelEmoji[item.level] || 'ℹ️';
+
+  let message = `${emoji} *${item.title}*\n\n`;
+  message += item.message;
+
+  if (item.source) {
+    message += `\n\n_Источник: ${item.source}_`;
+  }
+
+  message += `\n_${new Date(item.created_at).toLocaleString('ru-RU')}_`;
+
+  return {
+    json: {
+      id: item.id,
+      message,
+      level: item.level
+    }
+  };
+});
 ```
 
-#### 4.4 Telegram Send
+### Telegram Send to Admin
 ```yaml
 Type: Telegram
 Operation: Send Message
-Chat ID: "{{ $env.TELEGRAM_CHAT_CANDIDATES }}"
-Text: "{{ $json.report }}"
+Chat ID: "{{ $env.TELEGRAM_ADMIN_CHAT_ID }}"
+Text: "{{ $json.message }}"
+Parse Mode: Markdown
+```
+
+### Mark as Sent (Supabase)
+```yaml
+Type: Supabase
+Operation: Update
+Table: admin_notifications
+Filter: id = {{ $json.id }}
+Data:
+  is_sent: true
+  sent_at: NOW()
+  sent_to_chat_id: {{ $env.TELEGRAM_ADMIN_CHAT_ID }}
 ```
 
 ---
 
-## Workflow 5: State Cleanup
+## Workflow 8: Maintenance
 
 ### Описание
-Очищает устаревшие состояния диалогов из Redis.
+Ежечасные задачи обслуживания:
+- Очистка устаревших данных
+- Связывание payments с candidates
+- Очистка LLM кэша
+- Очистка Redis
 
 ### Структура нод
 
 ```
-┌─────────────┐     ┌─────────────┐
-│  Schedule   │────▶│  Redis      │
-│  Hourly     │     │  Cleanup    │
-└─────────────┘     └─────────────┘
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Schedule   │────▶│  Cleanup    │────▶│  Link       │────▶│  Log        │
+│  Hourly     │     │  Old Data   │     │  Payments   │     │  Results    │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-### Детальное описание нод
-
-#### 5.1 Schedule Trigger
+### Cleanup Old Data (Supabase RPC)
 ```yaml
-Type: Schedule Trigger
-Rule: "0 * * * *"  # Каждый час
+Type: Supabase
+Operation: RPC
+Function: cleanup_old_data
+Parameters:
+  p_audit_days: 90
+  p_logs_days: 30
+  p_cache_days: 7
 ```
 
-#### 5.2 Redis Cleanup (Code Node)
+### Link Payments (Supabase RPC)
+```yaml
+Type: Supabase
+Operation: RPC
+Function: link_all_unlinked_payments
+```
+
+### Log Results (Code Node)
 ```javascript
-// Redis автоматически удаляет ключи по TTL,
-// но эта нода может использоваться для логирования
-// или принудительной очистки
+const cleanupResult = $('Cleanup Old Data').item.json;
+const linkResult = $('Link Payments').item.json;
 
-// Если нужна принудительная очистка:
-// 1. Получить все ключи dialog:*
-// 2. Проверить timestamp в value
-// 3. Удалить устаревшие
-
-// В n8n можно использовать Execute Command для redis-cli
-// redis-cli KEYS "dialog:*" | xargs -r redis-cli DEL
-
-return {
-  json: {
-    status: 'TTL-based cleanup is automatic',
-    timestamp: new Date().toISOString()
-  }
+const summary = {
+  timestamp: new Date().toISOString(),
+  cleanup: cleanupResult,
+  linkedPayments: linkResult
 };
+
+// Если много удалено или связано - отправить уведомление админу
+const significantCleanup = cleanupResult.some(r => r.deleted_count > 100);
+const significantLinks = linkResult > 10;
+
+if (significantCleanup || significantLinks) {
+  // Создаём уведомление админу
+  return {
+    json: {
+      ...summary,
+      createNotification: true,
+      notificationTitle: 'Результаты обслуживания',
+      notificationMessage: `Очистка: ${JSON.stringify(cleanupResult)}\nСвязано оплат: ${linkResult}`
+    }
+  };
+}
+
+return { json: summary };
 ```
 
 ---
 
-## Переменные окружения n8n
-
-Создайте следующие credentials и environment variables:
-
-### Credentials
-
-1. **Telegram Bot API**
-   - Name: `HR Bot Telegram`
-   - Access Token: `<BOT_TOKEN>`
-
-2. **Supabase**
-   - Name: `HR Bot Supabase`
-   - Host: `https://xxx.supabase.co`
-   - Service Role Key: `<SERVICE_KEY>`
-
-3. **Redis**
-   - Name: `HR Bot Redis`
-   - Host: `<REDIS_HOST>`
-   - Port: `6379`
-   - Password: `<REDIS_PASSWORD>` (если есть)
-
-### Environment Variables
+## Переменные окружения (v2.0)
 
 ```bash
 # Telegram
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_CANDIDATES=-1001234567890
 TELEGRAM_CHAT_PAYMENTS=-1001234567891
+TELEGRAM_ADMIN_CHAT_ID=123456789  # Личный чат или группа админов
 
 # DeepSeek
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
@@ -879,47 +1381,35 @@ REDIS_URL=redis://localhost:6379
 
 ---
 
-## Тестирование
+## Тестирование (v2.0)
 
-### Тестовые сценарии
+### Новые тестовые сценарии
 
-#### Группа «Направленные»
+#### Тест: Проверка дубликатов
+```
+1. Добавить кандидата: "Иванов Петр, охранник, 89161234567, ТЦ Мега"
+2. Попытаться добавить: "Иванов П., охранник, 8-916-123-45-67, Мега"
+3. Ожидание: бот предупредит о дубликате с кнопками выбора
+```
 
-**Сценарий 1: Полные данные за одно сообщение**
+#### Тест: Inline-кнопки
 ```
-Иванов Петр Сергеевич, 35 лет, мужчина, охранник,
-работал 2 года в ЧОП Альфа, тел 89161234567, объект ТЦ Мега
+1. Добавить неполные данные: "Мария Петрова, администратор"
+2. Ожидание: сообщение с прогресс-баром и кнопками полей
+3. Нажать кнопку "➕ Телефон"
+4. Ожидание: бот попросит ввести телефон
 ```
-Ожидание: запись в БД, подтверждение ✅
 
-**Сценарий 2: Неполные данные**
+#### Тест: Кастомные отчёты
 ```
-Мария Петрова, администратор
+/report today     → Отчёт за сегодня
+/report week      → Отчёт за неделю
+/stats            → Воронка найма
+/export candidates → Excel-файл
 ```
-Ожидание: вопрос о телефоне и объекте
 
-**Сценарий 3: Дополнение после вопроса**
+#### Тест: Статус кандидата
 ```
-(после вопроса бота)
-89161234567, работать будет в Hilton
+/status Иванов собеседование
+→ Ожидание: статус изменён, история записана
 ```
-Ожидание: запись в БД, подтверждение ✅
-
-#### Группа «Оплата мс»
-
-**Сценарий 1: Стандартный формат**
-```
-26.01
-МП
-Горничная
-Иванова Юлия 11
-Каратова Самара 8
-```
-Ожидание: 2 записи в БД, подтверждение ✅
-
-**Сценарий 2: Неполный формат**
-```
-Иванова Юлия 11
-Каратова Самара 8
-```
-Ожидание: вопрос о дате, объекте, должности
