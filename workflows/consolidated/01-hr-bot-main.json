@@ -508,25 +508,21 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $json.chatId }}",
-        "text": "={{ $json.text }}",
-        "additionalFields": {
-          "parse_mode": "Markdown",
-          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
-          "reply_to_message_id": "={{ $json.message.message_id }}"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": {{ $json.chatId }},\n  \"text\": {{ JSON.stringify($json.text) }},\n  \"parse_mode\": \"Markdown\",\n  \"reply_to_message_id\": {{ $json.message.message_id }},\n  \"reply_markup\": {{ JSON.stringify($json.keyboard) }}\n}",
+        "options": {}
       },
       "id": "telegram-candidate-response",
       "name": "Send Response",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [2640, 500],
-      "credentials": {
-        "telegramApi": {
-          "id": "1",
-          "name": "HR Bot Telegram"
-        }
-      }
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
