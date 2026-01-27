@@ -1,0 +1,722 @@
+{
+  "name": "HR Bot - Main",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-candidates",
+              "leftValue": "={{ $json.message?.chat?.id || $json.callback_query?.message?.chat?.id }}",
+              "rightValue": "={{ $env.TELEGRAM_CHAT_CANDIDATES }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "filter-payments",
+              "leftValue": "={{ $json.message?.chat?.id || $json.callback_query?.message?.chat?.id }}",
+              "rightValue": "={{ $env.TELEGRAM_CHAT_PAYMENTS }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "filter-groups",
+      "name": "Filter Groups",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 500]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.callback_query }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "callback"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "command"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "message-type-switch",
+      "name": "Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse callback data\nconst callback = $input.item.json.callback_query;\nconst data = callback.data;\nconst chatId = callback.message.chat.id;\nconst messageId = callback.message.message_id;\nconst userId = callback.from.id;\nconst username = callback.from.username;\n\nconst parts = data.split('_');\nconst action = parts[0];\nconst subAction = parts[1] || '';\nconst params = parts.slice(2).join('_');\n\nreturn {\n  json: {\n    action,\n    subAction,\n    params,\n    fullAction: data,\n    chatId,\n    messageId,\n    userId,\n    username,\n    originalMessage: callback.message,\n    callbackQueryId: callback.id\n  }\n};"
+      },
+      "id": "parse-callback",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "callback_query_id",
+              "value": "={{ $json.callbackQueryId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "answer-callback",
+      "name": "Answer Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.action }}", "rightValue": "confirm", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.action }}", "rightValue": "duplicate", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "duplicate"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.action }}", "rightValue": "add", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "add_field"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.action }}", "rightValue": "status", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "callback-switch",
+      "name": "Callback Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle confirm_yes - save candidate\nconst input = $input.item.json;\nconst chatId = input.chatId;\nconst userId = input.userId;\n\n// Get state from Redis will be done in next node\nreturn {\n  json: {\n    ...input,\n    stateKey: `hr_bot:state:${chatId}:${userId}`,\n    confirmAction: input.subAction // 'yes', 'no', 'edit', 'cancel'\n  }\n};"
+      },
+      "id": "prepare-confirm",
+      "name": "Prepare Confirm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 100]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ $json.stateKey }}"
+      },
+      "id": "redis-get-confirm-state",
+      "name": "Get Confirm State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1540, 100],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $('Prepare Confirm').item.json.confirmAction }}", "rightValue": "yes", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-confirm-yes",
+      "name": "Confirm Yes?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare data for insert\nconst stateData = $input.item.json;\nconst confirmData = $('Prepare Confirm').item.json;\n\nlet state;\ntry {\n  state = typeof stateData === 'string' ? JSON.parse(stateData) : stateData;\n} catch(e) {\n  state = { collectedData: {} };\n}\n\nconst data = state.collectedData || {};\n\nreturn {\n  json: {\n    full_name: data.full_name,\n    age: data.age || null,\n    gender: data.gender || null,\n    position: data.position,\n    experience: data.experience || null,\n    phone: data.phone,\n    phone_normalized: (data.phone || '').replace(/[^0-9]/g, '').replace(/^8/, '7'),\n    object_location: data.object_location,\n    status: 'направлен',\n    telegram_user_id: confirmData.userId,\n    telegram_username: confirmData.username,\n    telegram_chat_id: confirmData.chatId,\n    telegram_message_id: confirmData.messageId,\n    chatId: confirmData.chatId,\n    messageId: confirmData.messageId,\n    stateKey: confirmData.stateKey\n  }\n};"
+      },
+      "id": "prepare-insert",
+      "name": "Prepare Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "candidates",
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "full_name", "fieldValue": "={{ $json.full_name }}" },
+            { "fieldId": "age", "fieldValue": "={{ $json.age }}" },
+            { "fieldId": "gender", "fieldValue": "={{ $json.gender }}" },
+            { "fieldId": "position", "fieldValue": "={{ $json.position }}" },
+            { "fieldId": "experience", "fieldValue": "={{ $json.experience }}" },
+            { "fieldId": "phone", "fieldValue": "={{ $json.phone }}" },
+            { "fieldId": "phone_normalized", "fieldValue": "={{ $json.phone_normalized }}" },
+            { "fieldId": "object_location", "fieldValue": "={{ $json.object_location }}" },
+            { "fieldId": "status", "fieldValue": "={{ $json.status }}" },
+            { "fieldId": "telegram_user_id", "fieldValue": "={{ $json.telegram_user_id }}" },
+            { "fieldId": "telegram_username", "fieldValue": "={{ $json.telegram_username }}" },
+            { "fieldId": "telegram_chat_id", "fieldValue": "={{ $json.telegram_chat_id }}" }
+          ]
+        }
+      },
+      "id": "supabase-insert-candidate",
+      "name": "Insert Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2200, 0],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ $('Prepare Insert').item.json.stateKey }}"
+      },
+      "id": "redis-delete-state",
+      "name": "Clear State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2420, 0],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Prepare Insert').item.json.chatId }}",
+        "messageId": "={{ $('Prepare Insert').item.json.messageId }}",
+        "text": "=✅ *Кандидат сохранён!*\n\n👤 {{ $('Prepare Insert').item.json.full_name }}\n📞 {{ $('Prepare Insert').item.json.phone }}\n💼 {{ $('Prepare Insert').item.json.position }}\n📍 {{ $('Prepare Insert').item.json.object_location }}\n📊 Статус: направлен\n\nID: `{{ $('Insert Candidate').item.json.id }}`",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": {
+            "inline_keyboard": [[{ "text": "📋 Изменить статус", "callback_data": "={{ 'status_change_' + $('Insert Candidate').item.json.id }}" }]]
+          }
+        }
+      },
+      "id": "telegram-confirm-saved",
+      "name": "Confirm Saved",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2640, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Prepare Confirm').item.json.chatId }}",
+        "messageId": "={{ $('Prepare Confirm').item.json.messageId }}",
+        "text": "❌ *Отменено*\n\nДанные не сохранены.",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "telegram-confirm-cancelled",
+      "name": "Confirm Cancelled",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1980, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify text message\nconst message = $input.item.json.message;\nconst text = message.text || '';\nconst chatId = message.chat.id;\n\nconst CHAT_CANDIDATES = parseInt($env.TELEGRAM_CHAT_CANDIDATES);\nconst CHAT_PAYMENTS = parseInt($env.TELEGRAM_CHAT_PAYMENTS);\n\n// Эвристики\nlet candidateScore = 0;\nlet paymentScore = 0;\n\nif (chatId === CHAT_CANDIDATES) candidateScore += 30;\nelse if (chatId === CHAT_PAYMENTS) paymentScore += 30;\n\n// Телефон\nif (/(\\+7|8|7)[\\s\\-]?\\(?\\d{3}\\)?[\\s\\-]?\\d{3}[\\s\\-]?\\d{2}[\\s\\-]?\\d{2}/.test(text)) candidateScore += 30;\n\n// Возраст\nif (/\\d{1,2}\\s*(лет|год|года)/i.test(text)) candidateScore += 20;\n\n// Дата в начале\nif (/^\\d{1,2}\\.\\d{1,2}/.test(text.trim())) paymentScore += 40;\n\n// Часы\nif (/\\d+\\s*(час|ч\\.|ч\\b)/i.test(text)) paymentScore += 30;\n\n// Структура ФИО+число\nconst lines = text.split('\\n');\nif (lines.filter(l => /^[А-Яа-яЁё]+\\s+[А-Яа-яЁё]*\\s*\\d+$/.test(l.trim())).length >= 1) paymentScore += 25;\n\nlet messageType = 'chat';\nif (candidateScore > paymentScore && candidateScore >= 40) messageType = 'candidate';\nelse if (paymentScore > candidateScore && paymentScore >= 40) messageType = 'payment';\nelse if (candidateScore >= 30 || paymentScore >= 30) messageType = 'uncertain';\n\nreturn {\n  json: {\n    message,\n    messageType,\n    candidateScore,\n    paymentScore,\n    chatId,\n    userId: message.from.id,\n    username: message.from.username,\n    stateKey: `hr_bot:state:${chatId}:${message.from.id}`\n  }\n};"
+      },
+      "id": "classify-message",
+      "name": "Classify Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 600]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ $json.stateKey }}"
+      },
+      "id": "redis-get-state",
+      "name": "Get State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [880, 600],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine final message type considering Redis state\nconst redisData = $input.item.json;\nconst classifyData = $('Classify Message').item.json;\n\nlet hasState = false;\nlet state = null;\n\ntry {\n  if (redisData && typeof redisData === 'object' && Object.keys(redisData).length > 0) {\n    state = redisData;\n    hasState = true;\n  } else if (typeof redisData === 'string' && redisData.length > 2) {\n    state = JSON.parse(redisData);\n    hasState = true;\n  }\n} catch(e) {}\n\nlet finalType = classifyData.messageType;\nif (hasState && state.step) {\n  finalType = 'continuation';\n}\n\nreturn {\n  json: {\n    ...classifyData,\n    finalType,\n    hasState,\n    state: state || { collectedData: {}, step: 'initial' }\n  }\n};"
+      },
+      "id": "determine-type",
+      "name": "Determine Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 600]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.finalType }}", "rightValue": "candidate", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "candidate"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.finalType }}", "rightValue": "continuation", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "continuation"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.finalType }}", "rightValue": "payment", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "payment"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "route-by-type",
+      "name": "Route by Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1320, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"deepseek-chat\",\n  \"temperature\": 0.1,\n  \"max_tokens\": 500,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Извлеки данные кандидата. Ранее собрано: {{ JSON.stringify($json.state.collectedData) }}. Верни JSON: {\\\"full_name\\\": string|null, \\\"age\\\": number|null, \\\"gender\\\": \\\"м\\\"|\\\"ж\\\"|null, \\\"position\\\": string|null, \\\"experience\\\": string|null, \\\"phone\\\": string|null, \\\"object_location\\\": string|null, \\\"is_complete\\\": boolean, \\\"missing_fields\\\": string[], \\\"clarification_question\\\": string|null}. Обязательные: full_name, phone, position, object_location. Телефон: 79XXXXXXXXX\"\n    },\n    { \"role\": \"user\", \"content\": {{ JSON.stringify($json.message.text) }} }\n  ]\n}",
+        "options": {}
+      },
+      "id": "deepseek-parse-candidate",
+      "name": "DeepSeek Parse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "3",
+          "name": "DeepSeek API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process LLM response and merge with existing data\nconst llmResponse = $input.item.json;\nconst routeData = $('Route by Type').item.json;\n\nlet llmResult;\ntry {\n  const content = llmResponse.choices[0].message.content;\n  llmResult = typeof content === 'string' ? JSON.parse(content) : content;\n} catch(e) {\n  llmResult = { is_complete: false, missing_fields: ['full_name','phone','position','object_location'], clarification_question: 'Укажите ФИО, телефон, должность и объект.' };\n}\n\nconst existingData = routeData.state?.collectedData || {};\nconst collectedData = {\n  ...existingData,\n  ...(llmResult.full_name && { full_name: llmResult.full_name }),\n  ...(llmResult.age && { age: llmResult.age }),\n  ...(llmResult.gender && { gender: llmResult.gender }),\n  ...(llmResult.position && { position: llmResult.position }),\n  ...(llmResult.experience && { experience: llmResult.experience }),\n  ...(llmResult.phone && { phone: llmResult.phone }),\n  ...(llmResult.object_location && { object_location: llmResult.object_location })\n};\n\nconst requiredFields = ['full_name', 'phone', 'position', 'object_location'];\nconst missingFields = requiredFields.filter(f => !collectedData[f]);\nconst isComplete = missingFields.length === 0;\n\nreturn {\n  json: {\n    ...routeData,\n    collectedData,\n    isComplete,\n    missingFields,\n    clarificationQuestion: llmResult.clarification_question\n  }\n};"
+      },
+      "id": "process-llm-candidate",
+      "name": "Process LLM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM find_candidate_duplicates('{{ $json.collectedData.phone || '' }}', '{{ $json.collectedData.full_name || '' }}', 30)"
+      },
+      "id": "check-duplicates",
+      "name": "Check Duplicates",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1980, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build response message with progress bar\nconst duplicates = $input.all().map(i => i.json).filter(d => d.id);\nconst processData = $('Process LLM').item.json;\nconst data = processData.collectedData;\nconst isComplete = processData.isComplete;\nconst missingFields = processData.missingFields;\n\n// Check for high-match duplicates\nconst highMatch = duplicates.find(d => d.similarity_score >= 90);\nif (highMatch) {\n  return {\n    json: {\n      ...processData,\n      responseType: 'duplicate',\n      duplicate: highMatch,\n      text: `⚠️ *Найден похожий кандидат* (${highMatch.similarity_score}%):\\n\\n👤 ${highMatch.full_name}\\n📞 ${highMatch.phone}\\n💼 ${highMatch.position}\\n📍 ${highMatch.object_location}\\n📊 ${highMatch.status}\\n\\nЧто сделать?`,\n      keyboard: {\n        inline_keyboard: [\n          [{ text: '➕ Добавить новый', callback_data: `duplicate_add_${highMatch.id}` }, { text: '🔗 Обновить', callback_data: `duplicate_update_${highMatch.id}` }],\n          [{ text: '❌ Отмена', callback_data: 'duplicate_cancel' }]\n        ]\n      }\n    }\n  };\n}\n\nconst labels = { full_name: 'ФИО', phone: 'Телефон', position: 'Должность', object_location: 'Объект', age: 'Возраст', gender: 'Пол', experience: 'Опыт' };\nconst required = ['full_name', 'phone', 'position', 'object_location'];\nconst optional = ['age', 'gender', 'experience'];\n\nlet text = '📋 *Данные кандидата*\\n\\n*Обязательные:*\\n';\nlet filled = 0;\nrequired.forEach(f => {\n  if (data[f]) { text += `✅ ${labels[f]}: ${data[f]}\\n`; filled++; }\n  else text += `❌ ${labels[f]}: _не указано_\\n`;\n});\n\ntext += '\\n*Дополнительные:*\\n';\noptional.forEach(f => {\n  if (data[f]) text += `✅ ${labels[f]}: ${data[f]}\\n`;\n  else text += `⬜ ${labels[f]}: _не указано_\\n`;\n});\n\nconst pct = Math.round((filled / required.length) * 100);\nconst bar = '█'.repeat(Math.round(pct/10)) + '░'.repeat(10 - Math.round(pct/10));\ntext += `\\n📊 [${bar}] ${pct}%`;\n\nlet keyboard;\nif (isComplete) {\n  text += '\\n\\n✅ Все обязательные поля заполнены!';\n  keyboard = { inline_keyboard: [[{ text: '✅ Сохранить', callback_data: 'confirm_yes' }, { text: '✏️ Изменить', callback_data: 'confirm_edit' }], [{ text: '❌ Отмена', callback_data: 'confirm_cancel' }]] };\n} else {\n  const q = processData.clarificationQuestion || `Укажите: ${missingFields.map(f => labels[f]).join(', ')}`;\n  text += `\\n\\n${q}`;\n  const btns = missingFields.slice(0,4).map(f => ({ text: `➕ ${labels[f]}`, callback_data: `add_field_${f}` }));\n  keyboard = { inline_keyboard: [btns.slice(0,2), btns.slice(2,4), [{ text: '❌ Отмена', callback_data: 'confirm_cancel' }]].filter(r => r.length) };\n}\n\nreturn {\n  json: {\n    ...processData,\n    responseType: isComplete ? 'confirm' : 'incomplete',\n    text,\n    keyboard\n  }\n};"
+      },
+      "id": "build-candidate-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 500]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $json.stateKey }}",
+        "value": "={{ JSON.stringify({ collectedData: $json.collectedData, step: $json.isComplete ? 'confirming' : 'collecting' }) }}",
+        "expire": true,
+        "ttl": 3600
+      },
+      "id": "redis-save-candidate-state",
+      "name": "Save State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2420, 500],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.message.message_id }}"
+        }
+      },
+      "id": "telegram-candidate-response",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2640, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse payment message\nconst routeData = $input.item.json;\nconst text = routeData.message.text || '';\nconst lines = text.split('\\n').map(l => l.trim()).filter(l => l);\n\nconst result = { workDate: null, objectLocation: null, position: null, employees: [], errors: [], isValid: false };\n\n// Date (line 1)\nconst dateMatch = lines[0]?.match(/^(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{2,4}))?$/);\nif (dateMatch) {\n  const d = dateMatch[1].padStart(2,'0'), m = dateMatch[2].padStart(2,'0'), y = dateMatch[3] || new Date().getFullYear();\n  result.workDate = `${y}-${m}-${d}`;\n} else result.errors.push('Не распознана дата');\n\n// Object (line 2)\nif (lines[1]) result.objectLocation = lines[1];\nelse result.errors.push('Не указан объект');\n\n// Position (line 3)\nif (lines[2]) result.position = lines[2];\nelse result.errors.push('Не указана должность');\n\n// Employees (remaining lines)\nfor (let i = 3; i < lines.length; i++) {\n  const line = lines[i];\n  let match = line.match(/^([А-Яа-яЁё\\s\\.]+)\\s+(\\d+(?:\\.\\d+)?)$/) ||\n              line.match(/^(\\d+(?:\\.\\d+)?)\\s+([А-Яа-яЁё\\s\\.]+)$/)?.reverse() ||\n              line.match(/^([А-Яа-яЁё\\s\\.]+)[\\-:]\\s*(\\d+(?:\\.\\d+)?)$/);\n  if (match) result.employees.push({ fullName: match[1].trim(), hours: parseFloat(match[2]) });\n  else if (line.length > 2) result.errors.push(`Не распознано: ${line}`);\n}\n\nresult.isValid = result.workDate && result.objectLocation && result.position && result.employees.length > 0;\n\nreturn { json: { ...routeData, parsed: result } };"
+      },
+      "id": "parse-payment",
+      "name": "Parse Payment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 800]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.parsed.isValid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-payment-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 800]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare batch records\nconst input = $input.item.json;\nconst p = input.parsed;\nconst m = input.message;\n\nconst records = p.employees.map(e => ({\n  work_date: p.workDate,\n  object_location: p.objectLocation,\n  position: p.position,\n  full_name: e.fullName,\n  hours: e.hours,\n  telegram_user_id: m.from.id,\n  telegram_username: m.from.username,\n  telegram_chat_id: m.chat.id,\n  telegram_message_id: m.message_id\n}));\n\nreturn records.map(r => ({ json: r }));"
+      },
+      "id": "prepare-payment-batch",
+      "name": "Prepare Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 700]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "payments",
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "work_date", "fieldValue": "={{ $json.work_date }}" },
+            { "fieldId": "object_location", "fieldValue": "={{ $json.object_location }}" },
+            { "fieldId": "position", "fieldValue": "={{ $json.position }}" },
+            { "fieldId": "full_name", "fieldValue": "={{ $json.full_name }}" },
+            { "fieldId": "hours", "fieldValue": "={{ $json.hours }}" },
+            { "fieldId": "telegram_user_id", "fieldValue": "={{ $json.telegram_user_id }}" },
+            { "fieldId": "telegram_username", "fieldValue": "={{ $json.telegram_username }}" },
+            { "fieldId": "telegram_chat_id", "fieldValue": "={{ $json.telegram_chat_id }}" }
+          ]
+        }
+      },
+      "id": "supabase-insert-payments",
+      "name": "Insert Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2200, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT link_all_unlinked_payments()"
+      },
+      "id": "link-payments",
+      "name": "Link Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2420, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build payment confirmation\nconst parseData = $('Parse Payment').item.json;\nconst p = parseData.parsed;\n\nconst date = new Date(p.workDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });\nlet text = `✅ *Оплата записана*\\n\\n📅 ${date}\\n📍 ${p.objectLocation}\\n💼 ${p.position}\\n\\n👥 Сотрудников: ${p.employees.length}\\n⏱ Часов: ${p.employees.reduce((s,e) => s + e.hours, 0)}\\n\\n`;\np.employees.forEach((e, i) => text += `${i+1}. ${e.fullName} — ${e.hours} ч.\\n`);\n\nreturn { json: { text, chatId: parseData.chatId, messageId: parseData.message.message_id } };"
+      },
+      "id": "build-payment-confirm",
+      "name": "Build Confirm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 700]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-payment-confirm",
+      "name": "Send Confirm",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2860, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build payment error\nconst input = $input.item.json;\nconst errors = input.parsed.errors;\n\nlet text = '❌ *Ошибка разбора*\\n\\n';\nif (errors.length) text += errors.map(e => `• ${e}`).join('\\n');\ntext += '\\n\\n*Формат:*\\n```\\n26.01\\nМП\\nГорничная\\nИванова Юлия 11\\nПетрова Мария 8\\n```';\n\nreturn { json: { text, chatId: input.chatId, messageId: input.message.message_id } };"
+      },
+      "id": "build-payment-error",
+      "name": "Build Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 900]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-payment-error",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2200, 900],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Filter Groups", "type": "main", "index": 0 }]] },
+    "Filter Groups": { "main": [[{ "node": "Message Type", "type": "main", "index": 0 }]] },
+    "Message Type": { "main": [[{ "node": "Parse Callback", "type": "main", "index": 0 }], [], [{ "node": "Classify Message", "type": "main", "index": 0 }]] },
+    "Parse Callback": { "main": [[{ "node": "Answer Callback", "type": "main", "index": 0 }]] },
+    "Answer Callback": { "main": [[{ "node": "Callback Switch", "type": "main", "index": 0 }]] },
+    "Callback Switch": { "main": [[{ "node": "Prepare Confirm", "type": "main", "index": 0 }], [], [], []] },
+    "Prepare Confirm": { "main": [[{ "node": "Get Confirm State", "type": "main", "index": 0 }]] },
+    "Get Confirm State": { "main": [[{ "node": "Confirm Yes?", "type": "main", "index": 0 }]] },
+    "Confirm Yes?": { "main": [[{ "node": "Prepare Insert", "type": "main", "index": 0 }], [{ "node": "Confirm Cancelled", "type": "main", "index": 0 }]] },
+    "Prepare Insert": { "main": [[{ "node": "Insert Candidate", "type": "main", "index": 0 }]] },
+    "Insert Candidate": { "main": [[{ "node": "Clear State", "type": "main", "index": 0 }]] },
+    "Clear State": { "main": [[{ "node": "Confirm Saved", "type": "main", "index": 0 }]] },
+    "Classify Message": { "main": [[{ "node": "Get State", "type": "main", "index": 0 }]] },
+    "Get State": { "main": [[{ "node": "Determine Type", "type": "main", "index": 0 }]] },
+    "Determine Type": { "main": [[{ "node": "Route by Type", "type": "main", "index": 0 }]] },
+    "Route by Type": { "main": [[{ "node": "DeepSeek Parse", "type": "main", "index": 0 }], [{ "node": "DeepSeek Parse", "type": "main", "index": 0 }], [{ "node": "Parse Payment", "type": "main", "index": 0 }]] },
+    "DeepSeek Parse": { "main": [[{ "node": "Process LLM", "type": "main", "index": 0 }]] },
+    "Process LLM": { "main": [[{ "node": "Check Duplicates", "type": "main", "index": 0 }]] },
+    "Check Duplicates": { "main": [[{ "node": "Build Response", "type": "main", "index": 0 }]] },
+    "Build Response": { "main": [[{ "node": "Save State", "type": "main", "index": 0 }]] },
+    "Save State": { "main": [[{ "node": "Send Response", "type": "main", "index": 0 }]] },
+    "Parse Payment": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Prepare Batch", "type": "main", "index": 0 }], [{ "node": "Build Error", "type": "main", "index": 0 }]] },
+    "Prepare Batch": { "main": [[{ "node": "Insert Payments", "type": "main", "index": 0 }]] },
+    "Insert Payments": { "main": [[{ "node": "Link Payments", "type": "main", "index": 0 }]] },
+    "Link Payments": { "main": [[{ "node": "Build Confirm", "type": "main", "index": 0 }]] },
+    "Build Confirm": { "main": [[{ "node": "Send Confirm", "type": "main", "index": 0 }]] },
+    "Build Error": { "main": [[{ "node": "Send Error", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }],
+  "triggerCount": 1,
+  "active": false
+}

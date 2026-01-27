@@ -1,0 +1,404 @@
+{
+  "name": "HR Bot - Scheduled",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-trigger",
+      "name": "Daily 22:00 MSK",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 200],
+      "notes": "Ежедневный отчёт в 22:00 по Москве"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "notifications-trigger",
+      "name": "Every 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 500],
+      "notes": "Проверка уведомлений"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "maintenance-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 800],
+      "notes": "Обслуживание и очистка"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  status,\n  COUNT(*) as count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percentage\nFROM candidates \nWHERE created_at::date = CURRENT_DATE\nGROUP BY status\nORDER BY count DESC"
+      },
+      "id": "supabase-daily-stats",
+      "name": "Get Daily Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  telegram_username,\n  COUNT(*) as added_today\nFROM candidates \nWHERE created_at::date = CURRENT_DATE\nGROUP BY telegram_username\nORDER BY added_today DESC\nLIMIT 10"
+      },
+      "id": "supabase-daily-recruiters",
+      "name": "Get Recruiters",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 100],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build daily report\nconst stats = $('Get Daily Stats').all().map(i => i.json).filter(s => s.status);\nconst recruiters = $('Get Recruiters').all().map(i => i.json).filter(r => r.telegram_username);\n\nconst today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });\nconst total = stats.reduce((s, r) => s + parseInt(r.count || 0), 0);\n\nlet text = `📊 *Ежедневный отчёт*\\n📅 ${today}\\n\\n`;\n\nif (total === 0) {\n  text += '_Сегодня кандидатов не добавлено._';\n} else {\n  text += `👥 *Всего за день:* ${total}\\n\\n`;\n  \n  const emoji = { 'направлен': '📋', 'собеседование': '🗣', 'оформление': '📝', 'работает': '✅', 'отказ': '❌', 'архив': '📦' };\n  \n  text += '*По статусам:*\\n';\n  stats.forEach(s => {\n    text += `${emoji[s.status] || '•'} ${s.status}: ${s.count} (${s.percentage}%)\\n`;\n  });\n  \n  if (recruiters.length > 0) {\n    text += '\\n*Топ рекрутеров:*\\n';\n    recruiters.slice(0, 5).forEach((r, i) => {\n      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;\n      text += `${medal} @${r.telegram_username}: ${r.added_today}\\n`;\n    });\n  }\n}\n\nreturn { json: { text, hasData: total > 0 } };"
+      },
+      "id": "build-daily-report",
+      "name": "Build Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_CANDIDATES }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-daily-report",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "bot_logs",
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "level", "fieldValue": "info" },
+            { "fieldId": "source", "fieldValue": "daily-report" },
+            { "fieldId": "message", "fieldValue": "Daily report sent" },
+            { "fieldId": "context", "fieldValue": "={{ JSON.stringify({ hasData: $json.hasData }) }}" }
+          ]
+        }
+      },
+      "id": "log-daily-report",
+      "name": "Log Daily",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, message, level, source, created_at \nFROM admin_notifications \nWHERE is_sent = false \nORDER BY \n  CASE level \n    WHEN 'critical' THEN 1 \n    WHEN 'error' THEN 2 \n    WHEN 'warning' THEN 3 \n    ELSE 4 \n  END,\n  created_at ASC\nLIMIT 10"
+      },
+      "id": "supabase-get-notifications",
+      "name": "Get Notifications",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.id }}", "rightValue": "", "operator": { "type": "number", "operation": "exists" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-notifications",
+      "name": "Has Notifications?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format notification\nconst n = $input.item.json;\n\nconst emoji = { 'info': 'ℹ️', 'warning': '⚠️', 'error': '❌', 'critical': '🚨' };\nconst text = `${emoji[n.level] || 'ℹ️'} *${n.title}*\\n\\n${n.message}\\n\\n_${n.source} • ${new Date(n.created_at).toLocaleString('ru-RU')}_`;\n\nreturn { json: { id: n.id, text } };"
+      },
+      "id": "format-notification",
+      "name": "Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-send-notification",
+      "name": "Send to Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "admin_notifications",
+        "filters": {
+          "conditions": [
+            { "keyName": "id", "keyValue": "={{ $('Format').item.json.id }}" }
+          ]
+        },
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "is_sent", "fieldValue": "true" },
+            { "fieldId": "sent_at", "fieldValue": "={{ new Date().toISOString() }}" }
+          ]
+        }
+      },
+      "id": "supabase-mark-sent",
+      "name": "Mark Sent",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM llm_cache WHERE expires_at < NOW() RETURNING id"
+      },
+      "id": "cleanup-llm-cache",
+      "name": "Cleanup LLM Cache",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM bot_logs WHERE created_at < NOW() - INTERVAL '30 days' RETURNING id"
+      },
+      "id": "cleanup-logs",
+      "name": "Cleanup Logs",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 800],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '90 days' RETURNING id"
+      },
+      "id": "cleanup-audit",
+      "name": "Cleanup Audit",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 900],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT link_all_unlinked_payments() as linked"
+      },
+      "id": "link-payments",
+      "name": "Link Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [440, 800],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate maintenance results\nconst llmCache = $('Cleanup LLM Cache').all().length;\nconst logs = $('Cleanup Logs').all().length;\nconst audit = $('Cleanup Audit').all().length;\nconst linked = $('Link Payments').item?.json?.linked || 0;\n\nconst totalCleaned = llmCache + logs + audit;\nconst significant = totalCleaned > 100 || linked > 10;\n\nreturn {\n  json: {\n    llmCache,\n    logs,\n    audit,\n    linked,\n    totalCleaned,\n    significant,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "aggregate-maintenance",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 800]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.significant }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-significant",
+      "name": "Significant?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 800]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "admin_notifications",
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "title", "fieldValue": "Результаты обслуживания" },
+            { "fieldId": "message", "fieldValue": "=Очистка:\\n- LLM кэш: {{ $json.llmCache }}\\n- Логи: {{ $json.logs }}\\n- Аудит: {{ $json.audit }}\\n\\nСвязано оплат: {{ $json.linked }}" },
+            { "fieldId": "level", "fieldValue": "info" },
+            { "fieldId": "source", "fieldValue": "maintenance" }
+          ]
+        }
+      },
+      "id": "create-maint-notification",
+      "name": "Create Notification",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "bot_logs",
+        "fieldsToSend": {
+          "values": [
+            { "fieldId": "level", "fieldValue": "info" },
+            { "fieldId": "source", "fieldValue": "maintenance" },
+            { "fieldId": "message", "fieldValue": "=Maintenance: cleaned {{ $json.totalCleaned }}, linked {{ $json.linked }}" },
+            { "fieldId": "context", "fieldValue": "={{ JSON.stringify($json) }}" }
+          ]
+        }
+      },
+      "id": "log-maintenance",
+      "name": "Log Maintenance",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 900],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 22:00 MSK": { "main": [[{ "node": "Get Daily Stats", "type": "main", "index": 0 }, { "node": "Get Recruiters", "type": "main", "index": 0 }]] },
+    "Get Daily Stats": { "main": [[{ "node": "Build Daily Report", "type": "main", "index": 0 }]] },
+    "Get Recruiters": { "main": [[{ "node": "Build Daily Report", "type": "main", "index": 0 }]] },
+    "Build Daily Report": { "main": [[{ "node": "Send Daily Report", "type": "main", "index": 0 }]] },
+    "Send Daily Report": { "main": [[{ "node": "Log Daily", "type": "main", "index": 0 }]] },
+    "Every 5 min": { "main": [[{ "node": "Get Notifications", "type": "main", "index": 0 }]] },
+    "Get Notifications": { "main": [[{ "node": "Has Notifications?", "type": "main", "index": 0 }]] },
+    "Has Notifications?": { "main": [[{ "node": "Format", "type": "main", "index": 0 }]] },
+    "Format": { "main": [[{ "node": "Send to Admin", "type": "main", "index": 0 }]] },
+    "Send to Admin": { "main": [[{ "node": "Mark Sent", "type": "main", "index": 0 }]] },
+    "Every Hour": { "main": [[{ "node": "Cleanup LLM Cache", "type": "main", "index": 0 }, { "node": "Cleanup Logs", "type": "main", "index": 0 }, { "node": "Cleanup Audit", "type": "main", "index": 0 }]] },
+    "Cleanup LLM Cache": { "main": [[{ "node": "Link Payments", "type": "main", "index": 0 }]] },
+    "Cleanup Logs": { "main": [[{ "node": "Link Payments", "type": "main", "index": 0 }]] },
+    "Cleanup Audit": { "main": [[{ "node": "Link Payments", "type": "main", "index": 0 }]] },
+    "Link Payments": { "main": [[{ "node": "Aggregate", "type": "main", "index": 0 }]] },
+    "Aggregate": { "main": [[{ "node": "Significant?", "type": "main", "index": 0 }]] },
+    "Significant?": { "main": [[{ "node": "Create Notification", "type": "main", "index": 0 }], [{ "node": "Log Maintenance", "type": "main", "index": 0 }]] },
+    "Create Notification": { "main": [[{ "node": "Log Maintenance", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Moscow" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }],
+  "triggerCount": 3,
+  "active": false
+}
