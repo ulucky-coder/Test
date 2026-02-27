@@ -1,0 +1,27 @@
+name: PR Security Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Grep for common secret patterns
+        run: |
+          set -euo pipefail
+
+          PATTERNS='AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----'
+
+          if git grep -nE "$PATTERNS" -- . ':(exclude).github/workflows/pr-security-check.yml'; then
+            echo "Potential secret pattern detected."
+            exit 1
+          else
+            echo "No secret patterns detected."
+          fi
