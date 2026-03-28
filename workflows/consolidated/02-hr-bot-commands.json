@@ -1,0 +1,527 @@
+{
+  "name": "HR Bot - Commands",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.message?.text }}", "rightValue": "/", "operator": { "type": "string", "operation": "startsWith" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "is-command",
+      "name": "Is Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse command\nconst message = $input.item.json.message;\nconst text = message.text || '';\nconst match = text.match(/^\\/([\\w]+)(?:\\s+(.*))?$/);\n\nif (!match) return { json: { isValid: false } };\n\nconst command = match[1].toLowerCase();\nconst args = match[2]?.trim() || '';\n\nreturn {\n  json: {\n    isValid: true,\n    command,\n    args,\n    chatId: message.chat.id,\n    userId: message.from.id,\n    username: message.from.username,\n    messageId: message.message_id\n  }\n};"
+      },
+      "id": "parse-command",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "report", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "report"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "stats", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "stats"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "export", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "export"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "status", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "help", "operator": { "type": "string", "operation": "equals" } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "command-switch",
+      "name": "Command Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse report arguments\nconst input = $input.item.json;\nconst args = input.args;\nconst today = new Date();\nconst fmt = d => d.toISOString().split('T')[0];\n\nlet startDate, endDate;\n\nif (!args || args === 'today') {\n  startDate = endDate = fmt(today);\n} else if (args === 'week') {\n  const weekAgo = new Date(today);\n  weekAgo.setDate(weekAgo.getDate() - 7);\n  startDate = fmt(weekAgo);\n  endDate = fmt(today);\n} else if (args === 'month') {\n  const monthAgo = new Date(today);\n  monthAgo.setMonth(monthAgo.getMonth() - 1);\n  startDate = fmt(monthAgo);\n  endDate = fmt(today);\n} else {\n  const match = args.match(/(\\d{1,2})\\.(\\d{1,2})-(\\d{1,2})\\.(\\d{1,2})/);\n  if (match) {\n    const y = today.getFullYear();\n    startDate = `${y}-${match[2].padStart(2,'0')}-${match[1].padStart(2,'0')}`;\n    endDate = `${y}-${match[4].padStart(2,'0')}-${match[3].padStart(2,'0')}`;\n  } else {\n    startDate = endDate = fmt(today);\n  }\n}\n\nreturn { json: { ...input, startDate, endDate } };"
+      },
+      "id": "parse-report-args",
+      "name": "Parse Report Args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM candidates WHERE created_at::date BETWEEN '{{ $json.startDate }}' AND '{{ $json.endDate }}' ORDER BY created_at DESC"
+      },
+      "id": "supabase-get-candidates",
+      "name": "Get Candidates",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 100],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build report\nconst candidates = $input.all().map(i => i.json).filter(c => c.id);\nconst parseData = $('Parse Report Args').item.json;\nconst { startDate, endDate, chatId, messageId } = parseData;\n\nconst fmtDate = d => new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });\n\nlet text = `📊 *Отчёт по кандидатам*\\n📅 ${fmtDate(startDate)} — ${fmtDate(endDate)}\\n\\n`;\n\nif (!candidates.length) {\n  text += '_Кандидатов не найдено._';\n} else {\n  const byStatus = {};\n  candidates.forEach(c => {\n    if (!byStatus[c.status]) byStatus[c.status] = [];\n    byStatus[c.status].push(c);\n  });\n  \n  text += `👥 Всего: ${candidates.length}\\n\\n`;\n  \n  const emoji = { 'направлен': '📋', 'собеседование': '🗣', 'оформление': '📝', 'работает': '✅', 'отказ': '❌', 'архив': '📦' };\n  Object.entries(byStatus).forEach(([status, list]) => {\n    text += `${emoji[status] || '•'} ${status}: ${list.length}\\n`;\n  });\n  \n  text += '\\n*Последние 10:*\\n';\n  candidates.slice(0, 10).forEach((c, i) => {\n    text += `\\n${i+1}. *${c.full_name}*\\n   📞 ${c.phone} | 💼 ${c.position}\\n   📊 ${c.status}\\n`;\n  });\n  \n  if (candidates.length > 10) text += `\\n_...и ещё ${candidates.length - 10}_`;\n}\n\nconst keyboard = {\n  inline_keyboard: [\n    [{ text: '📥 Excel', callback_data: `export_candidates_${startDate}_${endDate}` }],\n    [{ text: '📊 Воронка', callback_data: 'report_funnel' }, { text: '👥 Рекрутеры', callback_data: 'report_recruiters' }]\n  ]\n};\n\nreturn { json: { text, keyboard, chatId, messageId } };"
+      },
+      "id": "build-report",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1540, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_funnel_stats(30)"
+      },
+      "id": "supabase-funnel-stats",
+      "name": "Get Funnel Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build funnel stats\nconst stats = $input.all().map(i => i.json).filter(s => s.status);\nconst cmdData = $('Parse Command').item.json;\n\nlet text = '📊 *Воронка найма*\\n📅 Последние 30 дней\\n\\n';\n\nconst emoji = { 'направлен': '📋', 'собеседование': '🗣', 'оформление': '📝', 'работает': '✅', 'отказ': '❌', 'архив': '📦' };\nconst total = stats.reduce((s, r) => s + parseInt(r.count || 0), 0);\n\nstats.forEach(s => {\n  const pct = total > 0 ? Math.round((s.count / total) * 100) : 0;\n  const bar = '█'.repeat(Math.round(pct / 5));\n  text += `${emoji[s.status] || '•'} *${s.status}*: ${s.count} (${pct}%)\\n   ${bar}\\n\\n`;\n});\n\nconst hired = stats.find(s => s.status === 'работает')?.count || 0;\nconst conversion = total > 0 ? Math.round((hired / total) * 100) : 0;\ntext += `\\n📈 *Конверсия:* ${conversion}%`;\n\nreturn { json: { text, chatId: cmdData.chatId, messageId: cmdData.messageId } };"
+      },
+      "id": "build-funnel",
+      "name": "Build Funnel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-send-funnel",
+      "name": "Send Funnel",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse export args\nconst input = $input.item.json;\nconst args = input.args.split(' ');\nconst exportType = args[0] || 'candidates';\nconst period = args[1] || 'month';\n\nconst today = new Date();\nconst fmt = d => d.toISOString().split('T')[0];\n\nlet startDate, endDate = fmt(today);\nif (period === 'week') {\n  const d = new Date(today); d.setDate(d.getDate() - 7);\n  startDate = fmt(d);\n} else {\n  const d = new Date(today); d.setMonth(d.getMonth() - 1);\n  startDate = fmt(d);\n}\n\nreturn { json: { ...input, exportType, startDate, endDate } };"
+      },
+      "id": "parse-export-args",
+      "name": "Parse Export Args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM {{ $json.exportType }} WHERE created_at::date BETWEEN '{{ $json.startDate }}' AND '{{ $json.endDate }}' ORDER BY created_at DESC"
+      },
+      "id": "supabase-export-data",
+      "name": "Get Export Data",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert to CSV\nconst data = $input.all().map(i => i.json).filter(r => r.id);\nconst exportArgs = $('Parse Export Args').item.json;\n\nif (!data.length) {\n  return { json: { hasData: false, chatId: exportArgs.chatId, messageId: exportArgs.messageId } };\n}\n\nconst headers = Object.keys(data[0]);\nlet csv = headers.join(';') + '\\n';\ndata.forEach(row => {\n  csv += headers.map(h => {\n    let val = row[h];\n    if (val === null || val === undefined) val = '';\n    if (typeof val === 'string' && (val.includes(';') || val.includes('\"') || val.includes('\\n'))) {\n      val = '\"' + val.replace(/\"/g, '\"\"') + '\"';\n    }\n    return val;\n  }).join(';') + '\\n';\n}\n);\n\nconst filename = `${exportArgs.exportType}_${exportArgs.startDate}_${exportArgs.endDate}.csv`;\n\nreturn {\n  json: {\n    hasData: true,\n    filename,\n    chatId: exportArgs.chatId,\n    messageId: exportArgs.messageId\n  },\n  binary: {\n    data: {\n      data: Buffer.from(csv, 'utf-8').toString('base64'),\n      mimeType: 'text/csv',\n      fileName: filename\n    }\n  }\n};"
+      },
+      "id": "build-csv",
+      "name": "Build CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.hasData }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-export-data",
+      "name": "Has Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1540, 500]
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $json.chatId }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "📥 Экспорт данных готов!",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-send-file",
+      "name": "Send File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1760, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "❌ Нет данных для экспорта за указанный период.",
+        "additionalFields": {
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-no-data",
+      "name": "No Data",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1760, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse status command: /status Иванов собеседование\nconst input = $input.item.json;\nconst args = input.args;\n\n// Разбираем: имя/часть имени + новый статус\nconst parts = args.split(/\\s+/);\nif (parts.length < 2) {\n  return { json: { isValid: false, error: 'Формат: /status <ФИО> <статус>', ...input } };\n}\n\nconst newStatus = parts[parts.length - 1].toLowerCase();\nconst nameQuery = parts.slice(0, -1).join(' ');\n\nconst validStatuses = ['направлен', 'собеседование', 'оформление', 'работает', 'отказ', 'архив'];\nif (!validStatuses.includes(newStatus)) {\n  return { json: { isValid: false, error: `Неверный статус. Доступные: ${validStatuses.join(', ')}`, ...input } };\n}\n\nreturn { json: { isValid: true, nameQuery, newStatus, ...input } };"
+      },
+      "id": "parse-status-args",
+      "name": "Parse Status Args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.isValid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-status-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 700]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM candidates WHERE full_name ILIKE '%{{ $json.nameQuery }}%' ORDER BY created_at DESC LIMIT 5"
+      },
+      "id": "supabase-find-candidate",
+      "name": "Find Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1320, 600],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process found candidates\nconst candidates = $input.all().map(i => i.json).filter(c => c.id);\nconst statusArgs = $('Parse Status Args').item.json;\n\nif (!candidates.length) {\n  return { json: { found: false, text: `❌ Кандидат \"${statusArgs.nameQuery}\" не найден.`, chatId: statusArgs.chatId, messageId: statusArgs.messageId } };\n}\n\nif (candidates.length === 1) {\n  return { json: { found: true, single: true, candidate: candidates[0], newStatus: statusArgs.newStatus, chatId: statusArgs.chatId, messageId: statusArgs.messageId } };\n}\n\n// Multiple candidates - ask to choose\nlet text = `🔍 Найдено ${candidates.length} кандидатов:\\n\\n`;\nconst keyboard = { inline_keyboard: [] };\n\ncandidates.forEach((c, i) => {\n  text += `${i+1}. ${c.full_name} (${c.status})\\n`;\n  keyboard.inline_keyboard.push([{ text: `${i+1}. ${c.full_name}`, callback_data: `status_set_${c.id}_${statusArgs.newStatus}` }]);\n});\n\ntext += '\\nВыберите кандидата:';\n\nreturn { json: { found: true, single: false, text, keyboard, chatId: statusArgs.chatId, messageId: statusArgs.messageId } };"
+      },
+      "id": "process-status-result",
+      "name": "Process Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.single }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "if-single-candidate",
+      "name": "Single?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT change_candidate_status({{ $json.candidate.id }}, '{{ $json.newStatus }}', {{ $json.chatId }}, 'command')"
+      },
+      "id": "supabase-update-status",
+      "name": "Update Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1980, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Process Result').item.json.chatId }}",
+        "text": "=✅ Статус изменён!\\n\\n👤 {{ $('Process Result').item.json.candidate.full_name }}\\n📊 {{ $('Process Result').item.json.candidate.status }} → {{ $('Process Result').item.json.newStatus }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $('Process Result').item.json.messageId }}"
+        }
+      },
+      "id": "telegram-status-updated",
+      "name": "Status Updated",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2200, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-choose-candidate",
+      "name": "Choose Candidate",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1980, 700],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.error || $json.text }}",
+        "additionalFields": {
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-status-error",
+      "name": "Status Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 800],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "*Доступные команды:*\n\n📊 *Отчёты:*\n/report - Отчёт за сегодня\n/report week - За неделю\n/report month - За месяц\n/report 01.01-31.01 - За период\n\n📈 *Статистика:*\n/stats - Воронка найма\n\n📥 *Экспорт:*\n/export candidates - Кандидаты (CSV)\n/export payments - Оплаты (CSV)\n/export candidates week - За неделю\n\n📋 *Статус:*\n/status Иванов собеседование\n/status Петрова работает\n\n*Доступные статусы:*\nнаправлен, собеседование, оформление, работает, отказ, архив",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $('Parse Command').item.json.messageId }}"
+        }
+      },
+      "id": "telegram-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 900],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').item.json.chatId }}",
+        "text": "❓ Неизвестная команда. Используйте /help для списка команд.",
+        "additionalFields": {
+          "reply_to_message_id": "={{ $('Parse Command').item.json.messageId }}"
+        }
+      },
+      "id": "telegram-unknown",
+      "name": "Unknown Command",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 1100],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Is Command?", "type": "main", "index": 0 }]] },
+    "Is Command?": { "main": [[{ "node": "Parse Command", "type": "main", "index": 0 }]] },
+    "Parse Command": { "main": [[{ "node": "Command Switch", "type": "main", "index": 0 }]] },
+    "Command Switch": {
+      "main": [
+        [{ "node": "Parse Report Args", "type": "main", "index": 0 }],
+        [{ "node": "Get Funnel Stats", "type": "main", "index": 0 }],
+        [{ "node": "Parse Export Args", "type": "main", "index": 0 }],
+        [{ "node": "Parse Status Args", "type": "main", "index": 0 }],
+        [{ "node": "Send Help", "type": "main", "index": 0 }],
+        [{ "node": "Unknown Command", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Report Args": { "main": [[{ "node": "Get Candidates", "type": "main", "index": 0 }]] },
+    "Get Candidates": { "main": [[{ "node": "Build Report", "type": "main", "index": 0 }]] },
+    "Build Report": { "main": [[{ "node": "Send Report", "type": "main", "index": 0 }]] },
+    "Get Funnel Stats": { "main": [[{ "node": "Build Funnel", "type": "main", "index": 0 }]] },
+    "Build Funnel": { "main": [[{ "node": "Send Funnel", "type": "main", "index": 0 }]] },
+    "Parse Export Args": { "main": [[{ "node": "Get Export Data", "type": "main", "index": 0 }]] },
+    "Get Export Data": { "main": [[{ "node": "Build CSV", "type": "main", "index": 0 }]] },
+    "Build CSV": { "main": [[{ "node": "Has Data?", "type": "main", "index": 0 }]] },
+    "Has Data?": { "main": [[{ "node": "Send File", "type": "main", "index": 0 }], [{ "node": "No Data", "type": "main", "index": 0 }]] },
+    "Parse Status Args": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Find Candidate", "type": "main", "index": 0 }], [{ "node": "Status Error", "type": "main", "index": 0 }]] },
+    "Find Candidate": { "main": [[{ "node": "Process Result", "type": "main", "index": 0 }]] },
+    "Process Result": { "main": [[{ "node": "Single?", "type": "main", "index": 0 }]] },
+    "Single?": { "main": [[{ "node": "Update Status", "type": "main", "index": 0 }], [{ "node": "Choose Candidate", "type": "main", "index": 0 }]] },
+    "Update Status": { "main": [[{ "node": "Status Updated", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [{ "name": "HR Bot" }],
+  "triggerCount": 1,
+  "active": false
+}

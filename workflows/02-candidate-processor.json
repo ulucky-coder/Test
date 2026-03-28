@@ -1,0 +1,664 @@
+{
+  "name": "HR Bot - Candidate Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "candidate-processor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "candidate-processor"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare context from input\nconst input = $input.item.json;\nconst message = input.message;\nconst classification = input.classification;\n\n// Формируем контекст\nconst context = classification.context || {\n  collectedData: {},\n  step: 'initial',\n  startedAt: new Date().toISOString()\n};\n\nreturn {\n  json: {\n    message,\n    context,\n    classification,\n    chatId: message.chat.id,\n    userId: message.from.id,\n    username: message.from.username\n  }\n};"
+      },
+      "id": "prepare-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check LLM Cache\nconst crypto = require('crypto');\nconst input = $input.item.json;\nconst message = input.message;\nconst context = input.context;\n\n// Генерируем ключ кэша на основе сообщения + контекста\nconst cacheKey = JSON.stringify({\n  text: message.text,\n  existingData: context.collectedData\n});\nconst messageHash = crypto.createHash('md5').update(cacheKey).digest('hex');\n\nreturn {\n  json: {\n    ...input,\n    messageHash,\n    checkCache: true\n  }\n};"
+      },
+      "id": "generate-cache-key",
+      "name": "Generate Cache Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT get_llm_cache('{{ $json.messageHash }}') as cached_result"
+      },
+      "id": "supabase-check-cache",
+      "name": "Check LLM Cache",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [660, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-cache",
+              "leftValue": "={{ $json.cached_result }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-cache-exists",
+      "name": "Cache Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use cached LLM result\nconst input = $input.item.json;\nconst cachedResult = input.cached_result;\nconst originalData = $('Generate Cache Key').item.json;\n\nreturn {\n  json: {\n    ...originalData,\n    llmResult: typeof cachedResult === 'string' ? JSON.parse(cachedResult) : cachedResult,\n    fromCache: true\n  }\n};"
+      },
+      "id": "use-cache",
+      "name": "Use Cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"deepseek-chat\",\n  \"temperature\": 0.1,\n  \"max_tokens\": 500,\n  \"response_format\": {\n    \"type\": \"json_object\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Ты — HR-ассистент. Извлеки данные кандидата из сообщения.\\n\\nРанее собранные данные:\\n{{ JSON.stringify($('Generate Cache Key').item.json.context.collectedData) }}\\n\\nВерни JSON:\\n{\\n  \\\"full_name\\\": string | null,\\n  \\\"age\\\": number | null,\\n  \\\"gender\\\": \\\"мужской\\\" | \\\"женский\\\" | null,\\n  \\\"position\\\": string | null,\\n  \\\"experience\\\": string | null,\\n  \\\"phone\\\": string | null,\\n  \\\"object_location\\\": string | null,\\n  \\\"is_complete\\\": boolean,\\n  \\\"missing_fields\\\": string[],\\n  \\\"clarification_question\\\": string | null\\n}\\n\\nОБЯЗАТЕЛЬНЫЕ поля: full_name, phone, position, object_location\\nТелефон нормализуй к формату 79XXXXXXXXX\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($('Generate Cache Key').item.json.message.text) }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "deepseek-parse",
+      "name": "DeepSeek Parse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "3",
+          "name": "DeepSeek API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process DeepSeek response\nconst input = $input.item.json;\nconst originalData = $('Generate Cache Key').item.json;\n\nlet llmResult;\ntry {\n  const content = input.choices[0].message.content;\n  llmResult = typeof content === 'string' ? JSON.parse(content) : content;\n} catch (e) {\n  llmResult = {\n    full_name: null,\n    phone: null,\n    position: null,\n    object_location: null,\n    is_complete: false,\n    missing_fields: ['full_name', 'phone', 'position', 'object_location'],\n    clarification_question: 'Не удалось распознать данные. Пожалуйста, укажите ФИО, телефон, должность и объект.'\n  };\n}\n\nreturn {\n  json: {\n    ...originalData,\n    llmResult,\n    fromCache: false\n  }\n};"
+      },
+      "id": "process-llm-response",
+      "name": "Process LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT set_llm_cache(\n  '{{ $json.messageHash }}',\n  {{ JSON.stringify($json.message.text) }},\n  '{{ JSON.stringify($json.llmResult).replace(/'/g, \"''\") }}',\n  24\n)"
+      },
+      "id": "save-to-cache",
+      "name": "Save to Cache",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1540, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge collected data with new LLM results\nconst input = $input.item.json;\nconst context = input.context;\nconst llmResult = input.llmResult;\n\n// Объединяем ранее собранные данные с новыми\nconst collectedData = {\n  ...context.collectedData,\n  ...(llmResult.full_name && { full_name: llmResult.full_name }),\n  ...(llmResult.age && { age: llmResult.age }),\n  ...(llmResult.gender && { gender: llmResult.gender }),\n  ...(llmResult.position && { position: llmResult.position }),\n  ...(llmResult.experience && { experience: llmResult.experience }),\n  ...(llmResult.phone && { phone: llmResult.phone }),\n  ...(llmResult.object_location && { object_location: llmResult.object_location })\n};\n\n// Проверяем обязательные поля\nconst requiredFields = ['full_name', 'phone', 'position', 'object_location'];\nconst missingFields = requiredFields.filter(f => !collectedData[f]);\nconst isComplete = missingFields.length === 0;\n\nreturn {\n  json: {\n    ...input,\n    collectedData,\n    isComplete,\n    missingFields,\n    clarificationQuestion: llmResult.clarification_question\n  }\n};"
+      },
+      "id": "merge-data",
+      "name": "Merge Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM find_candidate_duplicates(\n  '{{ $json.collectedData.phone || '' }}',\n  '{{ $json.collectedData.full_name || '' }}',\n  30\n)"
+      },
+      "id": "check-duplicates",
+      "name": "Check Duplicates",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1980, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process duplicate check results\nconst input = $input.all();\nconst mainData = $('Merge Data').item.json;\nconst duplicateResults = input.map(i => i.json);\n\n// Фильтруем дубликаты с высоким совпадением\nconst highMatchDuplicates = duplicateResults.filter(d => \n  d.similarity_score && d.similarity_score >= 90\n);\n\nif (highMatchDuplicates.length > 0) {\n  const dup = highMatchDuplicates[0];\n  \n  return {\n    json: {\n      ...mainData,\n      hasDuplicate: true,\n      duplicate: dup,\n      keyboard: {\n        inline_keyboard: [\n          [\n            { text: '➕ Добавить как новый', callback_data: `duplicate_add_${dup.id}` },\n            { text: '🔗 Обновить существующий', callback_data: `duplicate_update_${dup.id}` }\n          ],\n          [\n            { text: '❌ Отмена', callback_data: 'duplicate_cancel' }\n          ]\n        ]\n      },\n      duplicateMessage: `⚠️ *Найден похожий кандидат* (совпадение ${dup.similarity_score}%):\\n\\n` +\n        `👤 ${dup.full_name}\\n` +\n        `📞 ${dup.phone}\\n` +\n        `💼 ${dup.position}\\n` +\n        `📍 ${dup.object_location}\\n` +\n        `📊 Статус: ${dup.status}\\n` +\n        `📅 Добавлен: ${new Date(dup.created_at).toLocaleDateString('ru-RU')}\\n\\n` +\n        `Что сделать?`\n    }\n  };\n}\n\nreturn {\n  json: {\n    ...mainData,\n    hasDuplicate: false\n  }\n};"
+      },
+      "id": "process-duplicates",
+      "name": "Process Duplicates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-duplicate",
+              "leftValue": "={{ $json.hasDuplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-duplicate",
+      "name": "Has Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2420, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.duplicateMessage }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.message.message_id }}"
+        }
+      },
+      "id": "telegram-ask-duplicate",
+      "name": "Ask About Duplicate",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2640, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-complete",
+              "leftValue": "={{ $json.isComplete }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-complete",
+      "name": "Data Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2640, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build progress message for incomplete data\nconst input = $input.item.json;\nconst data = input.collectedData;\nconst missingFields = input.missingFields;\n\nconst requiredFields = ['full_name', 'phone', 'position', 'object_location'];\nconst optionalFields = ['age', 'gender', 'experience'];\n\nconst fieldLabels = {\n  full_name: 'ФИО',\n  phone: 'Телефон',\n  position: 'Должность',\n  object_location: 'Объект',\n  age: 'Возраст',\n  gender: 'Пол',\n  experience: 'Опыт'\n};\n\nconst fieldLabelsRu = {\n  full_name: 'ФИО',\n  phone: 'Телефон',\n  position: 'Должность',\n  object_location: 'Объект'\n};\n\n// Считаем заполненность\nlet filledRequired = 0;\nlet totalRequired = requiredFields.length;\n\nlet statusText = '📋 *Данные кандидата*\\n\\n';\n\n// Обязательные поля\nstatusText += '*Обязательные:*\\n';\nfor (const field of requiredFields) {\n  const value = data[field];\n  if (value) {\n    statusText += `✅ ${fieldLabels[field]}: ${value}\\n`;\n    filledRequired++;\n  } else {\n    statusText += `❌ ${fieldLabels[field]}: _не указано_\\n`;\n  }\n}\n\n// Опциональные поля\nstatusText += '\\n*Дополнительные:*\\n';\nfor (const field of optionalFields) {\n  const value = data[field];\n  if (value) {\n    statusText += `✅ ${fieldLabels[field]}: ${value}\\n`;\n  } else {\n    statusText += `⬜ ${fieldLabels[field]}: _не указано_\\n`;\n  }\n}\n\n// Прогресс-бар\nconst progress = Math.round((filledRequired / totalRequired) * 100);\nconst filledBlocks = Math.round(progress / 10);\nconst progressBar = '█'.repeat(filledBlocks) + '░'.repeat(10 - filledBlocks);\nstatusText += `\\n📊 Заполнено: [${progressBar}] ${progress}%`;\n\n// Кнопки для недостающих полей\nconst fieldButtons = missingFields.slice(0, 4).map(field => ({\n  text: `➕ ${fieldLabelsRu[field] || field}`,\n  callback_data: `add_field_${field}`\n}));\n\nconst keyboard = {\n  inline_keyboard: [\n    fieldButtons.slice(0, 2),\n    fieldButtons.slice(2, 4),\n    [{ text: '❌ Отмена', callback_data: 'confirm_cancel' }]\n  ].filter(row => row.length > 0)\n};\n\n// Уточняющий вопрос\nlet questionText = input.clarificationQuestion || '';\nif (!questionText && missingFields.length > 0) {\n  const missingLabels = missingFields.map(f => fieldLabelsRu[f] || f).join(', ');\n  questionText = `Пожалуйста, укажите: ${missingLabels}`;\n}\n\nreturn {\n  json: {\n    ...input,\n    statusText,\n    keyboard,\n    progress,\n    questionText\n  }\n};"
+      },
+      "id": "build-progress-message",
+      "name": "Build Progress Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2860, 500]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=hr_bot:state:{{ $json.chatId }}:{{ $json.userId }}",
+        "value": "={{ JSON.stringify({ collectedData: $json.collectedData, step: 'collecting', startedAt: $json.context.startedAt || new Date().toISOString() }) }}",
+        "expire": true,
+        "ttl": 3600
+      },
+      "id": "redis-save-state",
+      "name": "Save State to Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [3080, 500],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.statusText }}\\n\\n{{ $json.questionText }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.message.message_id }}"
+        }
+      },
+      "id": "telegram-ask-more",
+      "name": "Ask More Data",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3300, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build confirmation preview for complete data\nconst input = $input.item.json;\nconst data = input.collectedData;\n\nconst fieldLabels = {\n  full_name: 'ФИО',\n  phone: 'Телефон',\n  position: 'Должность',\n  object_location: 'Объект',\n  age: 'Возраст',\n  gender: 'Пол',\n  experience: 'Опыт'\n};\n\nlet statusText = '📋 *Проверьте данные кандидата*\\n\\n';\n\nstatusText += `👤 *ФИО:* ${data.full_name}\\n`;\nstatusText += `📞 *Телефон:* ${data.phone}\\n`;\nstatusText += `💼 *Должность:* ${data.position}\\n`;\nstatusText += `📍 *Объект:* ${data.object_location}\\n`;\n\nif (data.age) statusText += `🎂 *Возраст:* ${data.age}\\n`;\nif (data.gender) statusText += `👤 *Пол:* ${data.gender}\\n`;\nif (data.experience) statusText += `📝 *Опыт:* ${data.experience}\\n`;\n\nstatusText += '\\n✅ *Все обязательные поля заполнены!*';\nstatusText += '\\nПроверьте данные и подтвердите сохранение.';\n\nconst keyboard = {\n  inline_keyboard: [\n    [\n      { text: '✅ Сохранить', callback_data: 'confirm_yes' },\n      { text: '✏️ Изменить', callback_data: 'confirm_edit' }\n    ],\n    [\n      { text: '❌ Отмена', callback_data: 'confirm_cancel' }\n    ]\n  ]\n};\n\nreturn {\n  json: {\n    ...input,\n    statusText,\n    keyboard\n  }\n};"
+      },
+      "id": "build-confirm-preview",
+      "name": "Build Confirm Preview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2860, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=hr_bot:state:{{ $json.chatId }}:{{ $json.userId }}",
+        "value": "={{ JSON.stringify({ collectedData: $json.collectedData, step: 'confirming', startedAt: $json.context.startedAt || new Date().toISOString() }) }}",
+        "expire": true,
+        "ttl": 3600
+      },
+      "id": "redis-save-confirm-state",
+      "name": "Save Confirm State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [3080, 300],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.statusText }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}",
+          "reply_to_message_id": "={{ $json.message.message_id }}"
+        }
+      },
+      "id": "telegram-confirm-preview",
+      "name": "Send Confirm Preview",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3300, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"action\": \"processing\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Cache Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cache Key": {
+      "main": [
+        [
+          {
+            "node": "Check LLM Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check LLM Cache": {
+      "main": [
+        [
+          {
+            "node": "Cache Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cache Exists?": {
+      "main": [
+        [
+          {
+            "node": "Use Cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DeepSeek Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Cache": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Parse": {
+      "main": [
+        [
+          {
+            "node": "Process LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process LLM Response": {
+      "main": [
+        [
+          {
+            "node": "Save to Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Cache": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Merge Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Data": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Process Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Has Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Ask About Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Data Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask About Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Complete?": {
+      "main": [
+        [
+          {
+            "node": "Build Confirm Preview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Progress Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Progress Message": {
+      "main": [
+        [
+          {
+            "node": "Save State to Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save State to Redis": {
+      "main": [
+        [
+          {
+            "node": "Ask More Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask More Data": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Confirm Preview": {
+      "main": [
+        [
+          {
+            "node": "Save Confirm State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Confirm State": {
+      "main": [
+        [
+          {
+            "node": "Send Confirm Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Confirm Preview": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

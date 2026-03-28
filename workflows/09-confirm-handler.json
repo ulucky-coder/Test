@@ -1,0 +1,590 @@
+{
+  "name": "HR Bot - Confirm Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "confirm-handler",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "confirm-handler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse confirmation callback\nconst input = $input.item.json;\n\nreturn {\n  json: {\n    action: input.action,\n    params: input.params,\n    chatId: input.chatId,\n    messageId: input.messageId,\n    userId: input.userId,\n    username: input.username\n  }\n};"
+      },
+      "id": "parse-callback",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.params }}",
+                    "rightValue": "yes",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm_yes"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.params }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm_cancel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.params }}",
+                    "rightValue": "edit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm_edit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "action-switch",
+      "name": "Action Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "=hr_bot:state:{{ $json.chatId }}:{{ $json.userId }}"
+      },
+      "id": "get-state",
+      "name": "Get State from Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [660, 200],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse state and prepare for insert\nconst input = $input.item.json;\nconst parseData = $('Parse Callback').item.json;\n\nlet state;\ntry {\n  state = typeof input === 'string' ? JSON.parse(input) : input;\n} catch (e) {\n  return {\n    json: {\n      error: 'Состояние диалога не найдено. Начните заново.',\n      chatId: parseData.chatId\n    }\n  };\n}\n\nconst data = state.collectedData || {};\n\nreturn {\n  json: {\n    collectedData: data,\n    chatId: parseData.chatId,\n    messageId: parseData.messageId,\n    userId: parseData.userId,\n    username: parseData.username\n  }\n};"
+      },
+      "id": "prepare-insert",
+      "name": "Prepare Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-error",
+      "name": "Has Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=❌ {{ $json.error }}",
+        "additionalFields": {}
+      },
+      "id": "send-error",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "candidates",
+        "fieldsToSend": {
+          "values": [
+            {
+              "fieldId": "full_name",
+              "fieldValue": "={{ $json.collectedData.full_name }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ $json.collectedData.phone }}"
+            },
+            {
+              "fieldId": "position",
+              "fieldValue": "={{ $json.collectedData.position }}"
+            },
+            {
+              "fieldId": "object_location",
+              "fieldValue": "={{ $json.collectedData.object_location }}"
+            },
+            {
+              "fieldId": "age",
+              "fieldValue": "={{ $json.collectedData.age || null }}"
+            },
+            {
+              "fieldId": "gender",
+              "fieldValue": "={{ $json.collectedData.gender || null }}"
+            },
+            {
+              "fieldId": "experience",
+              "fieldValue": "={{ $json.collectedData.experience || null }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "направлен"
+            },
+            {
+              "fieldId": "telegram_user_id",
+              "fieldValue": "={{ $json.userId }}"
+            },
+            {
+              "fieldId": "telegram_username",
+              "fieldValue": "={{ $json.username }}"
+            },
+            {
+              "fieldId": "telegram_chat_id",
+              "fieldValue": "={{ $json.chatId }}"
+            }
+          ]
+        }
+      },
+      "id": "insert-candidate",
+      "name": "Insert Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1320, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "=hr_bot:state:{{ $('Parse Callback').item.json.chatId }}:{{ $('Parse Callback').item.json.userId }}"
+      },
+      "id": "clear-state",
+      "name": "Clear Redis State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1540, 300],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success message\nconst insertResult = $('Insert Candidate').item.json;\nconst prepareData = $('Prepare Insert').item.json;\nconst data = prepareData.collectedData;\n\nconst message = `✅ *Кандидат успешно добавлен!*\\n\\n` +\n  `👤 *ФИО:* ${data.full_name}\\n` +\n  `📞 *Телефон:* ${data.phone}\\n` +\n  `💼 *Должность:* ${data.position}\\n` +\n  `📍 *Объект:* ${data.object_location}\\n` +\n  `📊 *Статус:* направлен\\n\\n` +\n  `_Добавлено @${prepareData.username}_`;\n\nconst keyboard = {\n  inline_keyboard: [\n    [\n      { text: '📋 Изменить статус', callback_data: `status_change_${insertResult.id}` }\n    ]\n  ]\n};\n\nreturn {\n  json: {\n    message,\n    keyboard,\n    chatId: prepareData.chatId,\n    messageId: prepareData.messageId,\n    candidateId: insertResult.id\n  }\n};"
+      },
+      "id": "build-success",
+      "name": "Build Success Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $json.chatId }}",
+        "messageId": "={{ $json.messageId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}"
+        }
+      },
+      "id": "edit-message-success",
+      "name": "Edit Message Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1980, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "=hr_bot:state:{{ $json.chatId }}:{{ $json.userId }}"
+      },
+      "id": "clear-state-cancel",
+      "name": "Clear State (Cancel)",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [660, 400],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Parse Callback').item.json.chatId }}",
+        "messageId": "={{ $('Parse Callback').item.json.messageId }}",
+        "text": "❌ *Отменено*\n\nДанные кандидата не сохранены.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "edit-message-cancel",
+      "name": "Edit Message Cancel",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $json.chatId }}",
+        "messageId": "={{ $json.messageId }}",
+        "text": "✏️ *Режим редактирования*\n\nОтправьте исправленные данные в свободной форме.\n\nНапример:\n`Телефон: 89161234567`\nили\n`Объект: ТЦ Мега`",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "edit-message-edit",
+      "name": "Edit Message Edit Mode",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=hr_bot:state:{{ $json.chatId }}:{{ $json.userId }}",
+        "value": "={{ JSON.stringify({ ...(JSON.parse($('Get State from Redis').item.json || '{}')), step: 'editing' }) }}",
+        "expire": true,
+        "ttl": 3600
+      },
+      "id": "set-edit-state",
+      "name": "Set Edit State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [880, 600],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Callback": {
+      "main": [
+        [
+          {
+            "node": "Action Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Switch": {
+      "main": [
+        [
+          {
+            "node": "Get State from Redis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clear State (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Edit Message Edit Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get State from Redis": {
+      "main": [
+        [
+          {
+            "node": "Prepare Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Insert": {
+      "main": [
+        [
+          {
+            "node": "Has Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Error?": {
+      "main": [
+        [
+          {
+            "node": "Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Candidate": {
+      "main": [
+        [
+          {
+            "node": "Clear Redis State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Redis State": {
+      "main": [
+        [
+          {
+            "node": "Build Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Success Message": {
+      "main": [
+        [
+          {
+            "node": "Edit Message Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Message Success": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear State (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Edit Message Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Message Cancel": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Message Edit Mode": {
+      "main": [
+        [
+          {
+            "node": "Set Edit State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Edit State": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

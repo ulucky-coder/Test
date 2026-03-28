@@ -1,0 +1,348 @@
+{
+  "name": "HR Bot - Payment Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "payment-processor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "payment-processor"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Payment Message with Regex\nconst input = $input.item.json;\nconst message = input.message;\nconst text = message.text || '';\nconst lines = text.split('\\n').map(l => l.trim()).filter(l => l);\n\n// Структура ожидаемого сообщения:\n// 26.01\n// МП (объект)\n// Горничная (должность)\n// Иванова Юлия 11 (ФИО часы)\n// Каратова Самара 8\n\nconst result = {\n  workDate: null,\n  objectLocation: null,\n  position: null,\n  employees: [],\n  parseErrors: [],\n  isValid: false\n};\n\n// Парсим дату (первая строка)\nconst dateMatch = lines[0]?.match(/^(\\d{1,2})\\.(\\d{1,2})(?:\\.(\\d{2,4}))?$/);\nif (dateMatch) {\n  const day = dateMatch[1].padStart(2, '0');\n  const month = dateMatch[2].padStart(2, '0');\n  const year = dateMatch[3] || new Date().getFullYear();\n  result.workDate = `${year}-${month}-${day}`;\n} else {\n  result.parseErrors.push('Не удалось распознать дату в первой строке');\n}\n\n// Парсим объект (вторая строка)\nif (lines[1]) {\n  result.objectLocation = lines[1];\n} else {\n  result.parseErrors.push('Не указан объект');\n}\n\n// Парсим должность (третья строка)\nif (lines[2]) {\n  result.position = lines[2];\n} else {\n  result.parseErrors.push('Не указана должность');\n}\n\n// Парсим сотрудников (остальные строки)\n// Формат: ФИО часы\n// Примеры: \"Иванова Юлия 11\", \"Петров И.И. 8\"\nfor (let i = 3; i < lines.length; i++) {\n  const line = lines[i];\n  \n  // Попытка 1: ФИО пробел число\n  const match1 = line.match(/^([А-Яа-яЁё\\s\\.]+)\\s+(\\d+(?:\\.\\d+)?)$/);\n  if (match1) {\n    result.employees.push({\n      fullName: match1[1].trim(),\n      hours: parseFloat(match1[2])\n    });\n    continue;\n  }\n  \n  // Попытка 2: число в начале (\"8 Иванова Юлия\")\n  const match2 = line.match(/^(\\d+(?:\\.\\d+)?)\\s+([А-Яа-яЁё\\s\\.]+)$/);\n  if (match2) {\n    result.employees.push({\n      fullName: match2[2].trim(),\n      hours: parseFloat(match2[1])\n    });\n    continue;\n  }\n  \n  // Попытка 3: разделитель \"-\" или \":\"\n  const match3 = line.match(/^([А-Яа-яЁё\\s\\.]+)[\\-:]\\s*(\\d+(?:\\.\\d+)?)$/);\n  if (match3) {\n    result.employees.push({\n      fullName: match3[1].trim(),\n      hours: parseFloat(match3[2])\n    });\n    continue;\n  }\n  \n  // Строка не распознана\n  if (line.length > 2) {\n    result.parseErrors.push(`Не распознана строка: \"${line}\"`);\n  }\n}\n\n// Валидация\nresult.isValid = result.workDate && \n                  result.objectLocation && \n                  result.position && \n                  result.employees.length > 0;\n\nreturn {\n  json: {\n    message,\n    parsed: result,\n    chatId: message.chat.id,\n    userId: message.from.id,\n    username: message.from.username\n  }\n};"
+      },
+      "id": "parse-payment",
+      "name": "Parse Payment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-valid",
+              "leftValue": "={{ $json.parsed.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-valid",
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build error message\nconst input = $input.item.json;\nconst errors = input.parsed.parseErrors;\n\nlet errorMessage = '❌ *Ошибка разбора сообщения*\\n\\n';\n\nif (errors.length > 0) {\n  errorMessage += '*Проблемы:*\\n';\n  errors.forEach(e => {\n    errorMessage += `• ${e}\\n`;\n  });\n}\n\nerrorMessage += '\\n*Ожидаемый формат:*\\n';\nerrorMessage += '```\\n';\nerrorMessage += '26.01\\n';\nerrorMessage += 'МП\\n';\nerrorMessage += 'Горничная\\n';\nerrorMessage += 'Иванова Юлия 11\\n';\nerrorMessage += 'Петрова Мария 8\\n';\nerrorMessage += '```';\n\nreturn {\n  json: {\n    ...input,\n    errorMessage\n  }\n};"
+      },
+      "id": "build-error",
+      "name": "Build Error Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.errorMessage }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.message.message_id }}"
+        }
+      },
+      "id": "telegram-send-error",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare batch insert records\nconst input = $input.item.json;\nconst parsed = input.parsed;\nconst message = input.message;\n\n// Формируем массив записей для batch insert\nconst records = parsed.employees.map(emp => ({\n  work_date: parsed.workDate,\n  object_location: parsed.objectLocation,\n  position: parsed.position,\n  full_name: emp.fullName,\n  hours: emp.hours,\n  telegram_user_id: message.from.id,\n  telegram_username: message.from.username,\n  telegram_chat_id: message.chat.id,\n  telegram_message_id: message.message_id\n}));\n\nreturn {\n  json: {\n    records,\n    summary: {\n      date: parsed.workDate,\n      object: parsed.objectLocation,\n      position: parsed.position,\n      employeesCount: records.length,\n      totalHours: records.reduce((sum, r) => sum + r.hours, 0)\n    },\n    message,\n    chatId: input.chatId\n  }\n};"
+      },
+      "id": "prepare-batch",
+      "name": "Prepare Batch Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 200]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "payments",
+        "dataToSend": "autoMapInputData"
+      },
+      "id": "supabase-batch-insert",
+      "name": "Batch Insert Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT link_all_unlinked_payments()"
+      },
+      "id": "link-payments",
+      "name": "Link Payments",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build confirmation message\nconst prepareData = $('Prepare Batch Insert').item.json;\nconst summary = prepareData.summary;\nconst linkResult = $input.item.json;\n\n// Форматируем дату\nconst date = new Date(summary.date);\nconst dateFormatted = date.toLocaleDateString('ru-RU', {\n  day: 'numeric',\n  month: 'long'\n});\n\nlet confirmMessage = '✅ *Оплата записана*\\n\\n';\nconfirmMessage += `📅 *Дата:* ${dateFormatted}\\n`;\nconfirmMessage += `📍 *Объект:* ${summary.object}\\n`;\nconfirmMessage += `💼 *Должность:* ${summary.position}\\n\\n`;\nconfirmMessage += `👥 *Сотрудников:* ${summary.employeesCount}\\n`;\nconfirmMessage += `⏱ *Всего часов:* ${summary.totalHours}\\n`;\n\n// Список сотрудников\nconfirmMessage += '\\n*Записи:*\\n';\nprepareData.records.forEach((r, i) => {\n  confirmMessage += `${i + 1}. ${r.full_name} — ${r.hours} ч.\\n`;\n});\n\nconfirmMessage += '\\n_Записи автоматически связаны с кандидатами (если найдены)_';\n\nreturn {\n  json: {\n    confirmMessage,\n    chatId: prepareData.chatId,\n    messageId: prepareData.message.message_id\n  }\n};"
+      },
+      "id": "build-confirm",
+      "name": "Build Confirm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.confirmMessage }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "telegram-confirm",
+      "name": "Send Confirm",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1540, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "bot_logs",
+        "fieldsToSend": {
+          "values": [
+            {
+              "fieldId": "level",
+              "fieldValue": "info"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "payment-processor"
+            },
+            {
+              "fieldId": "message",
+              "fieldValue": "={{ 'Записано ' + $('Prepare Batch Insert').item.json.summary.employeesCount + ' оплат за ' + $('Prepare Batch Insert').item.json.summary.date }}"
+            },
+            {
+              "fieldId": "context",
+              "fieldValue": "={{ JSON.stringify($('Prepare Batch Insert').item.json.summary) }}"
+            }
+          ]
+        }
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1540, 100],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Payment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Payment": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Batch Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error Message": {
+      "main": [
+        [
+          {
+            "node": "Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Batch Insert": {
+      "main": [
+        [
+          {
+            "node": "Batch Insert Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Insert Payments": {
+      "main": [
+        [
+          {
+            "node": "Link Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Payments": {
+      "main": [
+        [
+          {
+            "node": "Build Confirm",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Confirm": {
+      "main": [
+        [
+          {
+            "node": "Send Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Confirm": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

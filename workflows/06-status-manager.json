@@ -1,0 +1,531 @@
+{
+  "name": "HR Bot - Status Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "status-manager",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "status-manager"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse status command or callback\nconst input = $input.item.json;\n\nlet result = {\n  chatId: input.chatId,\n  userId: input.userId,\n  username: input.username,\n  messageId: input.messageId,\n  candidateId: null,\n  candidateSearch: null,\n  newStatus: null,\n  isCallback: false\n};\n\n// Callback from inline button: status_change_UUID или status_СТАТУС_UUID\nif (input.action === 'status') {\n  result.isCallback = true;\n  const parts = input.params.split('_');\n  \n  if (parts[0] === 'change') {\n    // status_change_UUID - показать кнопки выбора статуса\n    result.candidateId = parts[1];\n    result.showButtons = true;\n  } else {\n    // status_СТАТУС_UUID - изменить статус\n    result.newStatus = parts[0];\n    result.candidateId = parts[1];\n  }\n} else if (input.command === 'status' && input.args) {\n  // Command: /status Иванов собеседование\n  const args = input.args.trim();\n  const statuses = ['направлен', 'собеседование', 'оформление', 'работает', 'отказ', 'архив'];\n  \n  // Найти статус в конце строки\n  let foundStatus = null;\n  let searchTerm = args;\n  \n  for (const status of statuses) {\n    if (args.toLowerCase().endsWith(status)) {\n      foundStatus = status;\n      searchTerm = args.slice(0, -status.length).trim();\n      break;\n    }\n  }\n  \n  if (foundStatus) {\n    result.newStatus = foundStatus;\n    result.candidateSearch = searchTerm;\n  } else {\n    result.error = 'Укажите статус: направлен, собеседование, оформление, работает, отказ, архив';\n  }\n}\n\nreturn { json: result };"
+      },
+      "id": "parse-input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-error",
+      "name": "Has Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=❌ {{ $json.error }}",
+        "additionalFields": {}
+      },
+      "id": "send-error",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "show-buttons",
+              "leftValue": "={{ $json.showButtons }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-show-buttons",
+      "name": "Show Buttons?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM candidates WHERE id = '{{ $json.candidateId }}'"
+      },
+      "id": "get-candidate-by-id",
+      "name": "Get Candidate by ID",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 100],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build status buttons\nconst input = $input.item.json;\nconst candidate = input;\nconst parseData = $('Parse Input').item.json;\n\nconst statuses = [\n  { label: '📋 Направлен', value: 'направлен' },\n  { label: '🗣 Собеседование', value: 'собеседование' },\n  { label: '📝 Оформление', value: 'оформление' },\n  { label: '✅ Работает', value: 'работает' },\n  { label: '❌ Отказ', value: 'отказ' },\n  { label: '📦 Архив', value: 'архив' }\n];\n\n// Убираем текущий статус из кнопок\nconst availableStatuses = statuses.filter(s => s.value !== candidate.status);\n\nconst keyboard = {\n  inline_keyboard: [\n    availableStatuses.slice(0, 2).map(s => ({\n      text: s.label,\n      callback_data: `status_${s.value}_${candidate.id}`\n    })),\n    availableStatuses.slice(2, 4).map(s => ({\n      text: s.label,\n      callback_data: `status_${s.value}_${candidate.id}`\n    })),\n    availableStatuses.slice(4, 6).map(s => ({\n      text: s.label,\n      callback_data: `status_${s.value}_${candidate.id}`\n    })),\n    [{ text: '❌ Отмена', callback_data: 'status_cancel' }]\n  ].filter(row => row.length > 0)\n};\n\nconst statusEmoji = {\n  'направлен': '📋',\n  'собеседование': '🗣',\n  'оформление': '📝',\n  'работает': '✅',\n  'отказ': '❌',\n  'архив': '📦'\n};\n\nconst message = `📋 *Изменить статус кандидата*\\n\\n` +\n  `👤 *${candidate.full_name}*\\n` +\n  `📞 ${candidate.phone || '-'}\\n` +\n  `💼 ${candidate.position || '-'}\\n` +\n  `📍 ${candidate.object_location || '-'}\\n\\n` +\n  `Текущий статус: ${statusEmoji[candidate.status] || '•'} *${candidate.status}*\\n\\n` +\n  `Выберите новый статус:`;\n\nreturn {\n  json: {\n    message,\n    keyboard,\n    chatId: parseData.chatId,\n    candidateId: candidate.id\n  }\n};"
+      },
+      "id": "build-status-buttons",
+      "name": "Build Status Buttons",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}"
+        }
+      },
+      "id": "send-buttons",
+      "name": "Send Status Buttons",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1320, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-candidate-id",
+              "leftValue": "={{ $json.candidateId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-id",
+      "name": "Has Candidate ID?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM candidates \nWHERE \n  (phone LIKE '%{{ $json.candidateSearch }}%' \n   OR full_name ILIKE '%{{ $json.candidateSearch }}%')\n  AND created_at >= NOW() - INTERVAL '30 days'\nORDER BY created_at DESC\nLIMIT 1"
+      },
+      "id": "search-candidate",
+      "name": "Search Candidate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-found",
+      "name": "Candidate Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Candidate not found\nconst parseData = $('Parse Input').item.json;\n\nreturn {\n  json: {\n    message: `❌ Кандидат \"${parseData.candidateSearch}\" не найден за последние 30 дней.`,\n    chatId: parseData.chatId\n  }\n};"
+      },
+      "id": "not-found-message",
+      "name": "Not Found Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT change_candidate_status(\n  '{{ $json.id || $('Parse Input').item.json.candidateId }}'::uuid,\n  '{{ $('Parse Input').item.json.newStatus }}'::candidate_status,\n  {{ $('Parse Input').item.json.userId }},\n  '@{{ $('Parse Input').item.json.username }}',\n  NULL\n)"
+      },
+      "id": "change-status",
+      "name": "Change Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1540, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build success message\nconst parseData = $('Parse Input').item.json;\nconst candidate = $('Search Candidate').item?.json || $('Get Candidate by ID').item?.json || {};\n\nconst statusEmoji = {\n  'направлен': '📋',\n  'собеседование': '🗣',\n  'оформление': '📝',\n  'работает': '✅',\n  'отказ': '❌',\n  'архив': '📦'\n};\n\nconst newStatus = parseData.newStatus;\nconst emoji = statusEmoji[newStatus] || '•';\n\nconst message = `✅ *Статус изменён*\\n\\n` +\n  `👤 *${candidate.full_name || 'Кандидат'}*\\n` +\n  `📊 Новый статус: ${emoji} *${newStatus}*\\n\\n` +\n  `_Изменено @${parseData.username}_`;\n\nreturn {\n  json: {\n    message,\n    chatId: parseData.chatId,\n    messageId: parseData.messageId\n  }\n};"
+      },
+      "id": "build-success",
+      "name": "Build Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-success",
+      "name": "Send Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1980, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "send-not-found",
+      "name": "Send Not Found",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1760, 500],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Has Error?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Error?": {
+      "main": [
+        [
+          {
+            "node": "Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Buttons?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Show Buttons?": {
+      "main": [
+        [
+          {
+            "node": "Get Candidate by ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has Candidate ID?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Candidate by ID": {
+      "main": [
+        [
+          {
+            "node": "Build Status Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Status Buttons": {
+      "main": [
+        [
+          {
+            "node": "Send Status Buttons",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Status Buttons": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Candidate ID?": {
+      "main": [
+        [
+          {
+            "node": "Change Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Candidate": {
+      "main": [
+        [
+          {
+            "node": "Candidate Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Candidate Found?": {
+      "main": [
+        [
+          {
+            "node": "Change Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Found Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Found Message": {
+      "main": [
+        [
+          {
+            "node": "Send Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Change Status": {
+      "main": [
+        [
+          {
+            "node": "Build Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Success": {
+      "main": [
+        [
+          {
+            "node": "Send Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Success": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Not Found": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

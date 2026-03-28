@@ -1,0 +1,194 @@
+{
+  "name": "HR Bot - Daily Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 22,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily at 22:00 MSK",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  c.*,\n  u.telegram_username as recruiter\nFROM candidates c\nLEFT JOIN (\n  SELECT DISTINCT telegram_user_id, telegram_username \n  FROM candidates\n) u ON c.telegram_user_id = u.telegram_user_id\nWHERE DATE(c.created_at AT TIME ZONE 'Europe/Moscow') = CURRENT_DATE\nORDER BY c.created_at DESC"
+      },
+      "id": "get-today-candidates",
+      "name": "Get Today Candidates",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_funnel_stats(1)"
+      },
+      "id": "get-funnel-stats",
+      "name": "Get Funnel Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build daily report\nconst candidates = $('Get Today Candidates').all().map(i => i.json);\nconst funnelStats = $('Get Funnel Stats').all().map(i => i.json);\n\nconst today = new Date();\nconst dateFormatted = today.toLocaleDateString('ru-RU', {\n  weekday: 'long',\n  day: 'numeric',\n  month: 'long',\n  year: 'numeric'\n});\n\nlet report = `📊 *Ежедневный отчёт*\\n`;\nreport += `📅 ${dateFormatted}\\n\\n`;\n\n// Статистика за сегодня\nreport += `*Сегодня добавлено:* ${candidates.length} кандидат(ов)\\n\\n`;\n\n// Группировка по статусам\nconst byStatus = {};\ncandidates.forEach(c => {\n  if (!byStatus[c.status]) byStatus[c.status] = [];\n  byStatus[c.status].push(c);\n});\n\nconst statusEmoji = {\n  'направлен': '📋',\n  'собеседование': '🗣',\n  'оформление': '📝',\n  'работает': '✅',\n  'отказ': '❌',\n  'архив': '📦'\n};\n\nif (candidates.length > 0) {\n  report += '*По статусам:*\\n';\n  for (const [status, list] of Object.entries(byStatus)) {\n    const emoji = statusEmoji[status] || '•';\n    report += `${emoji} ${status}: ${list.length}\\n`;\n  }\n  report += '\\n';\n}\n\n// Воронка за день\nif (funnelStats.length > 0) {\n  report += '*Воронка найма (сегодня):*\\n';\n  funnelStats.forEach(s => {\n    const emoji = statusEmoji[s.status] || '•';\n    const bar = '█'.repeat(Math.min(Math.round(s.percentage / 10), 10));\n    report += `${emoji} ${s.status}: ${s.count} (${s.percentage}%)\\n`;\n  });\n  report += '\\n';\n}\n\n// Список добавленных кандидатов\nif (candidates.length > 0) {\n  report += '*Добавленные кандидаты:*\\n\\n';\n  \n  candidates.slice(0, 15).forEach((c, i) => {\n    report += `${i + 1}. *${c.full_name}*\\n`;\n    report += `   📞 ${c.phone || 'не указан'}\\n`;\n    report += `   💼 ${c.position || '-'} | 📍 ${c.object_location || '-'}\\n`;\n    if (c.recruiter) {\n      report += `   👤 @${c.recruiter}\\n`;\n    }\n    report += '\\n';\n  });\n  \n  if (candidates.length > 15) {\n    report += `\\n_...и ещё ${candidates.length - 15} кандидат(ов)_\\n`;\n  }\n} else {\n  report += '_Сегодня кандидаты не добавлялись._\\n';\n}\n\n// Кнопки для действий\nconst keyboard = {\n  inline_keyboard: [\n    [\n      { text: '📊 Статистика воронки', callback_data: 'report_funnel' },\n      { text: '👥 По рекрутерам', callback_data: 'report_recruiters' }\n    ],\n    [\n      { text: '📥 Экспорт за сегодня', callback_data: 'export_candidates_today' }\n    ]\n  ]\n};\n\nreturn {\n  json: {\n    report,\n    keyboard,\n    candidatesCount: candidates.length\n  }\n};"
+      },
+      "id": "build-report",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_CANDIDATES }}",
+        "text": "={{ $json.report }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={{ JSON.stringify($json.keyboard) }}"
+        }
+      },
+      "id": "telegram-send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "bot_logs",
+        "fieldsToSend": {
+          "values": [
+            {
+              "fieldId": "level",
+              "fieldValue": "info"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "daily-report"
+            },
+            {
+              "fieldId": "message",
+              "fieldValue": "={{ 'Отправлен ежедневный отчёт. Кандидатов: ' + $json.candidatesCount }}"
+            }
+          ]
+        }
+      },
+      "id": "log-report",
+      "name": "Log Report",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "4",
+          "name": "HR Bot Supabase"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily at 22:00 MSK": {
+      "main": [
+        [
+          {
+            "node": "Get Today Candidates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Funnel Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Today Candidates": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Funnel Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report": {
+      "main": [
+        [
+          {
+            "node": "Log Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Moscow"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}

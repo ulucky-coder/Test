@@ -1,0 +1,861 @@
+{
+  "name": "HR Bot - Message Router",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-candidates",
+              "leftValue": "={{ $json.message?.chat?.id || $json.callback_query?.message?.chat?.id }}",
+              "rightValue": "={{ $env.TELEGRAM_CHAT_CANDIDATES }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "filter-payments",
+              "leftValue": "={{ $json.message?.chat?.id || $json.callback_query?.message?.chat?.id }}",
+              "rightValue": "={{ $env.TELEGRAM_CHAT_PAYMENTS }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "filter-groups",
+      "name": "Filter Groups",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.callback_query }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "callback"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "command"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "message-type",
+      "name": "Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Callback Handler - обработка нажатий inline-кнопок\nconst callback = $input.item.json.callback_query;\nconst data = callback.data;\nconst chatId = callback.message.chat.id;\nconst messageId = callback.message.message_id;\nconst userId = callback.from.id;\nconst username = callback.from.username;\n\n// Парсим callback_data\nconst parts = data.split('_');\nconst action = parts[0];\nconst params = parts.slice(1).join('_');\n\nreturn {\n  json: {\n    action,\n    params,\n    chatId,\n    messageId,\n    userId,\n    username,\n    originalMessage: callback.message,\n    callbackQueryId: callback.id\n  }\n};"
+      },
+      "id": "callback-handler",
+      "name": "Callback Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "callback_query_id",
+              "value": "={{ $json.callbackQueryId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "answer-callback",
+      "name": "Answer Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 100]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "confirm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "duplicate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "duplicate"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "export",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "export"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "add",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "add_field"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "button-switch",
+      "name": "Button Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Command Handler - обработка команд /report, /status, /export\nconst message = $input.item.json.message;\nconst text = message.text || '';\nconst chatId = message.chat.id;\n\n// Парсим команду\nconst commandMatch = text.match(/^\\/([\\w]+)(?:\\s+(.*))?$/);\n\nif (!commandMatch) {\n  return { json: { command: null, isCommand: false } };\n}\n\nconst command = commandMatch[1].toLowerCase();\nconst args = commandMatch[2] ? commandMatch[2].trim() : '';\n\nreturn {\n  json: {\n    isCommand: true,\n    command,\n    args,\n    message,\n    chatId,\n    userId: message.from.id,\n    username: message.from.username\n  }\n};"
+      },
+      "id": "command-handler",
+      "name": "Command Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "report",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "report"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "stats",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "stats"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "export",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "export"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "command-switch",
+      "name": "Command Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check Redis State - проверяем есть ли активный диалог\nconst message = $input.item.json.message;\nconst chatId = message.chat.id;\nconst userId = message.from.id;\n\n// Ключ для Redis\nconst stateKey = `hr_bot:state:${chatId}:${userId}`;\n\nreturn {\n  json: {\n    message,\n    stateKey,\n    chatId,\n    userId\n  }\n};"
+      },
+      "id": "prepare-redis-key",
+      "name": "Prepare Redis Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 500]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ $json.stateKey }}"
+      },
+      "id": "redis-get-state",
+      "name": "Redis Get State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [880, 500],
+      "credentials": {
+        "redis": {
+          "id": "2",
+          "name": "HR Bot Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify Message - классификация сообщения эвристиками\nconst crypto = require('crypto');\nconst input = $input.item.json;\nconst message = input.message;\nconst text = message.text || '';\nconst chatId = message.chat.id;\nconst redisState = input.redisState;\n\nconst CHAT_CANDIDATES = parseInt($env.TELEGRAM_CHAT_CANDIDATES);\nconst CHAT_PAYMENTS = parseInt($env.TELEGRAM_CHAT_PAYMENTS);\n\n// Если есть активное состояние в Redis - это продолжение диалога\nif (redisState) {\n  const state = typeof redisState === 'string' ? JSON.parse(redisState) : redisState;\n  return {\n    json: {\n      message,\n      classification: {\n        type: 'continuation',\n        context: state\n      }\n    }\n  };\n}\n\n// Эвристики для классификации\nlet candidateScore = 0;\nlet paymentScore = 0;\n\n// Группа определяет контекст\nif (chatId === CHAT_CANDIDATES) {\n  candidateScore += 30;\n} else if (chatId === CHAT_PAYMENTS) {\n  paymentScore += 30;\n}\n\n// Проверка на телефон\nconst phoneRegex = /(\\+7|8|7)[\\s\\-]?\\(?\\d{3}\\)?[\\s\\-]?\\d{3}[\\s\\-]?\\d{2}[\\s\\-]?\\d{2}/;\nif (phoneRegex.test(text)) {\n  candidateScore += 30;\n}\n\n// Проверка на возраст\nconst ageRegex = /\\d{1,2}\\s*(лет|год|года)/i;\nif (ageRegex.test(text)) {\n  candidateScore += 20;\n}\n\n// Проверка на дату в начале\nconst dateRegex = /^\\d{1,2}\\.\\d{1,2}/;\nif (dateRegex.test(text.trim())) {\n  paymentScore += 40;\n}\n\n// Проверка на часы\nconst hoursRegex = /\\d+\\s*(час|ч\\.|ч\\b)/i;\nif (hoursRegex.test(text)) {\n  paymentScore += 30;\n}\n\n// Проверка на структуру \"ФИО число\"\nconst lines = text.split('\\n');\nconst employeeLineRegex = /^[А-Яа-яЁё]+\\s+[А-Яа-яЁё]*\\s*\\d+$/;\nconst hasEmployeeLines = lines.filter(l => employeeLineRegex.test(l.trim())).length >= 1;\nif (hasEmployeeLines) {\n  paymentScore += 25;\n}\n\n// Должности\nconst positions = ['горничная', 'уборщица', 'охранник', 'администратор',\n                   'повар', 'официант', 'бармен', 'кассир', 'продавец',\n                   'менеджер', 'водитель'];\nconst hasPosition = positions.some(p => text.toLowerCase().includes(p));\nif (hasPosition) {\n  candidateScore += 15;\n  paymentScore += 15;\n}\n\n// Определяем тип\nlet messageType = 'chat';\nlet confidence = 0;\nlet needsLLM = false;\n\nif (candidateScore > paymentScore && candidateScore >= 40) {\n  messageType = 'candidate';\n  confidence = Math.min(candidateScore, 100);\n} else if (paymentScore > candidateScore && paymentScore >= 40) {\n  messageType = 'payment';\n  confidence = Math.min(paymentScore, 100);\n} else if (candidateScore >= 30 || paymentScore >= 30) {\n  messageType = 'uncertain';\n  confidence = Math.max(candidateScore, paymentScore);\n  needsLLM = true;\n}\n\n// Генерируем хэш для кэширования LLM\nconst messageHash = crypto.createHash('md5').update(text).digest('hex');\n\nreturn {\n  json: {\n    message,\n    classification: {\n      type: messageType,\n      confidence,\n      candidateScore,\n      paymentScore,\n      needsLLM,\n      messageHash\n    }\n  }\n};"
+      },
+      "id": "classify-message",
+      "name": "Classify Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.classification.type }}",
+                    "rightValue": "candidate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "candidate"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.classification.type }}",
+                    "rightValue": "payment",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "payment"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.classification.type }}",
+                    "rightValue": "continuation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "continuation"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.classification.type }}",
+                    "rightValue": "uncertain",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "uncertain"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "route-message",
+      "name": "Route Message",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1320, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_URL }}/webhook/candidate-processor",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "webhook-candidate",
+      "name": "Webhook Candidate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_URL }}/webhook/payment-processor",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "webhook-payment",
+      "name": "Webhook Payment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_URL }}/webhook/candidate-processor",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "webhook-continuation",
+      "name": "Webhook Continuation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"deepseek-chat\",\n  \"temperature\": 0.1,\n  \"max_tokens\": 100,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Определи тип сообщения. Варианты: candidate (данные о кандидате), payment (данные об оплате), chat (обычный разговор). Отвечай одним словом.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($json.message.text) }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "llm-classify",
+      "name": "LLM Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 900],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "3",
+          "name": "DeepSeek API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process LLM Classification result\nconst input = $input.item.json;\nconst llmResponse = input.choices?.[0]?.message?.content?.toLowerCase() || 'chat';\nconst originalData = $('Classify Message').item.json;\n\nlet messageType = 'chat';\nif (llmResponse.includes('candidate')) {\n  messageType = 'candidate';\n} else if (llmResponse.includes('payment')) {\n  messageType = 'payment';\n}\n\nreturn {\n  json: {\n    message: originalData.message,\n    classification: {\n      ...originalData.classification,\n      type: messageType,\n      llmClassification: llmResponse\n    }\n  }\n};"
+      },
+      "id": "process-llm-result",
+      "name": "Process LLM Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 900]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=*Доступные команды:*\n\n/report - Отчёт за сегодня\n/report week - Отчёт за неделю\n/report month - Отчёт за месяц\n/report 01.01-31.01 - Отчёт за период\n\n/stats - Воронка найма\n/stats recruiters - По рекрутерам\n\n/export candidates - Excel кандидатов\n/export payments - Excel оплат\n\n/status Иванов собеседование - Изменить статус",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1100, 220],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "HR Bot Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter Groups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Groups": {
+      "main": [
+        [
+          {
+            "node": "Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Type": {
+      "main": [
+        [
+          {
+            "node": "Callback Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Command Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Redis Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Handler": {
+      "main": [
+        [
+          {
+            "node": "Answer Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Callback": {
+      "main": [
+        [
+          {
+            "node": "Button Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command Handler": {
+      "main": [
+        [
+          {
+            "node": "Command Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command Switch": {
+      "main": [
+        [],
+        [],
+        [],
+        [],
+        [
+          {
+            "node": "Send Help",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Redis Key": {
+      "main": [
+        [
+          {
+            "node": "Redis Get State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Get State": {
+      "main": [
+        [
+          {
+            "node": "Classify Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Message": {
+      "main": [
+        [
+          {
+            "node": "Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Message": {
+      "main": [
+        [
+          {
+            "node": "Webhook Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook Payment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook Continuation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LLM Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Classify": {
+      "main": [
+        [
+          {
+            "node": "Process LLM Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process LLM Result": {
+      "main": [
+        [
+          {
+            "node": "Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR Bot"
+    }
+  ],
+  "triggerCount": 1,
+  "active": false
+}
