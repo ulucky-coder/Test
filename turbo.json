@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".claude/templates/tokens.template.json"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": { "cache": false, "persistent": true },
+    "lint": { "outputs": [] },
+    "typecheck": { "outputs": [] },
+    "test:visual": {
+      "dependsOn": ["^build", "build"],
+      "outputs": ["playwright-report/**", "test-results/**"]
+    },
+    "test:a11y": { "dependsOn": ["^build", "build"], "outputs": ["playwright-report/**"] },
+    "test:lh": { "dependsOn": ["^build", "build"], "outputs": [".lighthouseci/**"] }
+  }
+}

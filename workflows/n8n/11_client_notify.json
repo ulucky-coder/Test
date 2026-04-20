@@ -1,0 +1,52 @@
+{
+  "name": "11_client_notify",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brandkit/notify",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-notify-in",
+      "name": "Webhook: Client Notify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { event, slug, url, recipient_email, subject, body } = $json.body;\nif (!event || !slug) return [{ json: { ok:false, error:'missing event or slug' } }];\nconst template = {\n  handoff_ready: { subject: `Your ${slug} brand kit is ready`, body: `Preview: ${url}\\n\\nThanks for the partnership.` },\n  phase_ready:   { subject: `Review needed for ${slug}`, body: `Open the portal to review: ${url}` },\n  phase_approved:{ subject: `${slug}: phase approved`, body: `Next step is underway.` }\n};\nconst t = template[event] ?? { subject, body };\nreturn [{ json: { slug, recipient_email, subject: t.subject, body: t.body } }];"
+      },
+      "id": "compose-email",
+      "name": "Compose Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "fromEmail": "={{$env.ATELIER_FROM_EMAIL}}",
+        "toEmail": "={{$json.recipient_email}}",
+        "subject": "={{$json.subject}}",
+        "text": "={{$json.body}}"
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Client Notify": { "main": [[{ "node": "Compose Email", "type": "main", "index": 0 }]] },
+    "Compose Email": { "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": ["brandkit", "notify"],
+  "triggerCount": 1,
+  "versionId": "1.0.0"
+}

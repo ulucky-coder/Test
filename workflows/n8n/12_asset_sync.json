@@ -1,0 +1,81 @@
+{
+  "name": "12_asset_sync",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brandkit/asset-sync",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-sync-in",
+      "name": "Webhook: Asset Sync",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { slug, edits } = $json.body;\nif (!slug || !Array.isArray(edits)) return [{ json: { ok:false, error:'missing slug/edits' } }];\nreturn edits.map(e => ({ json: { slug, path: e.path, ts: e.ts } }));"
+      },
+      "id": "fan-out",
+      "name": "Fan out Edits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/storage/v1/object/{{$json.slug}}/{{$json.path}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [
+          { "name": "authorization", "value": "Bearer {{$env.SUPABASE_SERVICE_KEY}}" },
+          { "name": "x-upsert", "value": "true" },
+          { "name": "content-type", "value": "application/octet-stream" }
+        ] },
+        "sendBody": true,
+        "specifyBody": "binaryData",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "upload-to-storage",
+      "name": "Upload to Supabase Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/assets",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [
+          { "name": "authorization", "value": "Bearer {{$env.SUPABASE_SERVICE_KEY}}" },
+          { "name": "apikey", "value": "={{$env.SUPABASE_SERVICE_KEY}}" },
+          { "name": "content-type", "value": "application/json" },
+          { "name": "prefer", "value": "return=minimal" }
+        ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"bucket\": \"{{$json.slug}}\",\n  \"path\": \"{{$json.path}}\",\n  \"kind\": \"other\",\n  \"metadata\": { \"synced_at\": \"{{$now}}\" }\n}",
+        "options": {}
+      },
+      "id": "record-in-db",
+      "name": "Record Asset Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [940, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Asset Sync": { "main": [[{ "node": "Fan out Edits", "type": "main", "index": 0 }]] },
+    "Fan out Edits": { "main": [[{ "node": "Upload to Supabase Storage", "type": "main", "index": 0 }]] },
+    "Upload to Supabase Storage": { "main": [[{ "node": "Record Asset Row", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": ["brandkit", "sync"],
+  "triggerCount": 1,
+  "versionId": "1.0.0"
+}

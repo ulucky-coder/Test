@@ -1,0 +1,33 @@
+{
+  "$schema": "https://brand.atelier/brief.schema.json",
+  "slug": "",
+  "name": "",
+  "tagline": "",
+  "industry": "saas",
+  "stage": "seed",
+  "audience": {
+    "primary": "",
+    "secondary": null,
+    "geography": ["US"]
+  },
+  "tone_axes": {
+    "serious_playful": 0.5,
+    "classic_modern": 0.5,
+    "minimal_expressive": 0.5,
+    "warm_cool": 0.5,
+    "premium_accessible": 0.5
+  },
+  "competitors": [],
+  "constraints": {
+    "must_include": [],
+    "must_avoid": [],
+    "color_locked": null,
+    "type_locked": null,
+    "trademark_blockers": []
+  },
+  "deliverables": ["logo", "brand_system", "site", "guidelines", "social"],
+  "success_metrics": [],
+  "deadline": null,
+  "budget_tier": "standard",
+  "notes": []
+}

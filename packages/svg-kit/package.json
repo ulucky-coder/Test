@@ -1,0 +1,12 @@
+{
+  "name": "@atelier/svg-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SVG primitives, constraint helpers, and renderers for logo generation and exports.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "svgo": "^3.3.2" },
+  "devDependencies": { "typescript": "^5.6.3" }
+}

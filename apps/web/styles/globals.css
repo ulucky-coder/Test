@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  /* Color tokens are overridden per-client by site-scaffold codegen from tokens.json */
+  --color-bg: oklch(99% 0 0);
+  --color-surface: oklch(96% 0 0);
+  --color-text: oklch(15% 0 0);
+  --color-text-muted: oklch(40% 0 0);
+  --color-border: oklch(85% 0 0);
+  --color-brand-primary: oklch(58% 0.18 250);
+  --color-brand-secondary: oklch(48% 0.14 30);
+  --color-brand-accent: oklch(85% 0.22 90);
+
+  --font-display: "Inter Display", system-ui, sans-serif;
+  --font-text: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --duration-fast: 160ms;
+  --duration-base: 240ms;
+  --duration-slow: 400ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-bg: oklch(8% 0 0);
+    --color-surface: oklch(12% 0 0);
+    --color-text: oklch(95% 0 0);
+    --color-text-muted: oklch(75% 0 0);
+    --color-border: oklch(25% 0 0);
+    --color-brand-primary: oklch(72% 0.16 250);
+    --color-brand-secondary: oklch(80% 0.12 30);
+    --color-brand-accent: oklch(88% 0.22 90);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-brand-primary);
+  color: var(--color-bg);
+}

@@ -1,26 +1,30 @@
 {
-  "name": "test",
-  "version": "1.0.0",
-  "description": "Supabase integration with n8n workflow automation",
-  "main": "src/supabase/index.js",
+  "name": "atelier",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atelier — Claude Code brand-kit factory. Supabase + n8n + Next.js monorepo.",
+  "packageManager": "pnpm@9.12.0",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "workflows": "node scripts/list-workflows.js"
+    "workflows": "node scripts/list-workflows.js",
+    "new-client": "node scripts/new-client.mjs",
+    "run-phase": "node scripts/run-phase.mjs",
+    "export-assets": "node scripts/export-assets.mjs",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "build": "turbo run build",
+    "dev:web": "pnpm --filter ./apps/web dev",
+    "dev:portal": "pnpm --filter ./apps/portal dev"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/ulucky-coder/Test"
-  },
-  "keywords": [
-    "supabase",
-    "n8n",
-    "mcp",
-    "workflow",
-    "automation"
-  ],
+  "repository": { "type": "git", "url": "https://github.com/ulucky-coder/Test" },
+  "keywords": ["atelier", "brand-kit", "claude-code", "supabase", "n8n", "nextjs"],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.91.0"
-  }
+  },
+  "devDependencies": {
+    "turbo": "^2.1.3",
+    "typescript": "^5.6.3"
+  },
+  "engines": { "node": ">=20" }
 }

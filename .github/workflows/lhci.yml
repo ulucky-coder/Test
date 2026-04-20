@@ -1,0 +1,19 @@
+name: Lighthouse CI
+on:
+  pull_request:
+    paths: ['apps/web/**', 'clients/**/site/**', 'packages/**']
+jobs:
+  lhci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter ./apps/web build
+      - name: Lighthouse CI
+        run: |
+          pnpm dlx @lhci/cli@0.14 autorun \
+            --config=apps/web/lighthouserc.json

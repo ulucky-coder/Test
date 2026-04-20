@@ -4,40 +4,73 @@
 
 ## Repository Overview
 
-**Project Name:** Test
-**Status:** Initial Setup
-**Last Updated:** 2026-01-23
+**Project Name:** Atelier (repo: Test)
+**Status:** Active — brand-kit factory foundation laid
+**Last Updated:** 2026-04-20
 
-This repository integrates with n8n workflow automation via MCP (Model Context Protocol). Update this section as the project develops with:
-- Project purpose and goals
-- Target audience/users
-- Key features
+Atelier is a Claude Code-native brand-kit factory: from client brief to Awwwards-caliber deliverable (logo, multi-page Next.js site, brand guidelines, social assets), with an approval-gated pipeline driven by Supabase + n8n.
+
+**Purpose:** Agency with AI enhancement — turn briefs into full brand kits in days, not months.
+**Audience:** Small business and startups, corporations/brands, freelancers and personal brands.
+**Key features:**
+- Claude generates logos as hand-authored SVG under mathematical constraints (no image model).
+- Gated pipeline: Intake → Strategy → Research → Concepts → Logo System → Brand System → Site Design → Site Build → QA → Guidelines → Deploy → Handoff.
+- Hard quality gates: Lighthouse ≥ 95, axe clean, visual regression zero diffs, design review ≥ 8/10.
+- Client portal for review and approval via Supabase auth + realtime.
 
 ## Project Structure
 
 ```
 /home/user/Test/
-├── .git/                    # Git version control
-├── .gitignore               # Git ignore patterns
-├── .mcp.json                # MCP server configuration
-├── CLAUDE.md                # This file - AI assistant guidelines
-├── package.json             # npm package configuration
-├── node_modules/            # npm dependencies
-└── src/
-    └── supabase/            # Supabase integration modules
-        ├── index.js         # Main export file
-        ├── client.js        # Supabase client configuration
-        ├── data.js          # CRUD operations (read, insert, update, delete)
-        ├── auth.js          # Authentication operations
-        ├── realtime.js      # Realtime subscriptions
-        └── storage.js       # File storage operations
+├── .claude/                 # Claude Code config: skills, agents, commands, hooks
+│   ├── settings.json
+│   ├── skills/              # 18 custom skills (brand-brief-intake ... deploy-orchestrator)
+│   ├── agents/              # 7 subagents (brand-strategist, art-director, ...)
+│   ├── commands/            # 10 slash commands (/new-brief, /run-phase, /ship, ...)
+│   ├── hooks/               # SessionStart, PreToolUse, PostToolUse, Stop
+│   ├── output-styles/
+│   ├── templates/           # brief.json, tokens.json, guidelines.mdx templates
+│   └── state.json           # {activeClient}
+├── .mcp.json.example        # MCP servers template (actual .mcp.json is gitignored)
+├── .github/workflows/       # CI (ci, lhci, visual-regression, deploy)
+├── apps/
+│   ├── web/                 # Next.js 15 + Tailwind v4 + shadcn template (cloned per client)
+│   └── portal/              # Client review portal (Next.js + Supabase auth + realtime)
+├── packages/
+│   ├── tokens/              # Token schema + codegen (JSON → CSS vars + TS + Tailwind)
+│   ├── svg-kit/             # SVG primitives, golden grid, optical corrections, linter
+│   ├── motion-kit/          # GSAP/Framer presets, reduced-motion helpers
+│   └── ui-kit/              # shadcn registry mirror
+├── clients/<slug>/          # Per-client workspaces (brief, moodboards, concepts, site, reports)
+├── research/                # Live research corpus consumed by skills
+├── sql/brandkit_schema.sql  # Clients, briefs, phases, moodboards, concepts, tokens, assets, reviews
+├── src/
+│   ├── supabase/            # Existing Supabase modules (auth, data, storage, realtime) — reused as-is
+│   ├── n8n/                 # Existing n8n client
+│   └── pipeline/            # Orchestration (phases, gates, runner)
+├── workflows/n8n/           # Workflows incl. 10_brandkit_gate, 11_client_notify, 12_asset_sync
+├── scripts/                 # CLI: new-client, run-phase, export-assets
+├── package.json             # Root (pnpm workspace, Turbo)
+├── pnpm-workspace.yaml
+└── turbo.json
 ```
 
 ### Directory Conventions
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/supabase/` | Supabase client and operation modules |
+| `.claude/skills/` | Custom skills consumed per-phase (SKILL.md per directory) |
+| `.claude/agents/` | Subagent definitions with tool allow-lists |
+| `apps/web/` | Canonical Next.js template cloned to `clients/<slug>/site/` |
+| `apps/portal/` | Client-facing review dashboard |
+| `packages/tokens/` | Design token schema + codegen |
+| `packages/svg-kit/` | SVG constraints and linter shared by logo skills |
+| `packages/motion-kit/` | Motion presets (easing, durations, reduced-motion branch) |
+| `packages/ui-kit/` | shadcn registry shared across client sites |
+| `clients/<slug>/` | One tree per engagement; phases.json mirrors Supabase phases |
+| `research/` | Living knowledge base consumed by skills; topics in research/README.md |
+| `src/pipeline/` | Phase runner, gate enforcement, state mirroring to Supabase |
+| `src/supabase/` | Existing Supabase client and operation modules (reused, unchanged) |
 | `tests/` | Test files (to be added) |
 | `docs/` | Documentation |
 | `scripts/` | Utility scripts |
@@ -45,12 +78,14 @@ This repository integrates with n8n workflow automation via MCP (Model Context P
 ## Technology Stack
 
 - **Backend:** Supabase (PostgreSQL, Auth, Realtime, Storage)
-- **MCP Integration:** n8n-mcp (Model Context Protocol server for n8n)
+- **Frontend:** Next.js 15 + Tailwind CSS v4 + shadcn/ui + Radix
+- **Motion:** GSAP 3 + Framer Motion 11 + Motion One + optional R3F
+- **MCP Integration:** n8n-mcp, Supabase MCP, Playwright MCP, Context7, Chrome DevTools, Filesystem, Vercel, Exa
 - **Automation:** n8n workflow automation (https://ulucky.app.n8n.cloud)
-- **Language:** JavaScript (Node.js)
-- **Package Manager:** npm
-- **Dependencies:** @supabase/supabase-js
-- **Testing Framework:** TBD
+- **Language:** TypeScript 5.6 (TSX) + JavaScript for existing modules
+- **Package Manager:** pnpm 9 (workspaces) + Turborepo
+- **QA:** Lighthouse CI, axe-core, Pa11y, Playwright (visual regression)
+- **Deploy:** Vercel (default), Docker VPS (optional), Supabase Edge/Storage
 
 ## Development Workflow
 
@@ -74,8 +109,31 @@ export SUPABASE_SERVICE_KEY="your-service-key"  # Optional, for admin operations
 
 | Command | Description |
 |---------|-------------|
-| `npm install` | Install dependencies |
-| `npm test` | Run tests |
+| `pnpm install` | Install monorepo deps |
+| `pnpm dev:web` | Start Next.js template dev server |
+| `pnpm dev:portal` | Start client portal dev server |
+| `pnpm typecheck` | Typecheck all packages |
+| `pnpm lint` | Lint all packages |
+| `pnpm build` | Turbo build across workspace |
+| `pnpm new-client <slug>` | Bootstrap a client workspace (CLI mirror of /new-brief) |
+| `pnpm run-phase <phase>` | Advance active client's pipeline |
+| `pnpm export-assets` | Write social asset manifest for active client |
+| `pnpm workflows` | List n8n workflows |
+
+### Slash commands (inside Claude Code)
+
+| Command | Purpose |
+|---------|---------|
+| `/new-brief <slug>` | Start a new engagement |
+| `/run-phase <phase>` | Execute one pipeline phase |
+| `/concept` | Generate 3 logo concepts |
+| `/logo [--variants]` | Iterate logo or forge the full variant kit |
+| `/site [--add-section X]` | Scaffold/advance Next.js site |
+| `/audit` | Run a11y + Lighthouse + visual regression |
+| `/approve <phase>` | Advance pipeline (records reviewer) |
+| `/revise <phase> "feedback"` | Reject and re-run with constraints |
+| `/ship` | Deploy to Vercel + Docker + Supabase; zip handoff |
+| `/retrospective` | Close loop: update skills from engagement signal |
 
 ### Usage Example
 

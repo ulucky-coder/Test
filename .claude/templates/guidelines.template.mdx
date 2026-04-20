@@ -1,0 +1,99 @@
+---
+title: "{{ brandName }} Brand Guidelines"
+version: "1.0.0"
+slug: "{{ slug }}"
+date: "{{ generatedAt }}"
+---
+
+import { Swatch, TypeSpecimen, LogoShowcase, DoDont, MotionClip } from "@brand/guidelines-components";
+
+# {{ brandName }}
+
+{{ tagline }}
+
+---
+
+## 1. Brand Story
+
+{{ missionParagraph }}
+
+**Archetype:** {{ archetype.primary }} · {{ archetype.secondary }}
+**Voice in one line:** {{ voiceOneLiner }}
+
+---
+
+## 2. Logo System
+
+<LogoShowcase variants={["primary", "horizontal", "stacked", "monogram", "favicon", "monochrome-black", "monochrome-white", "inverse"]} />
+
+### Clear space
+Minimum clear space equals the x-height of the wordmark on all sides.
+
+### Minimum size
+- Digital: 24px mark, 80px horizontal lockup
+- Print: 8mm mark, 24mm horizontal lockup
+
+### Do / Don't
+
+<DoDont items={[
+  { dont: "stretch or skew", do: "use provided lockups only" },
+  { dont: "recolor the mark", do: "use approved mono or inverse variants" },
+  { dont: "place on low-contrast backgrounds", do: "use inverse on dark, primary on light" }
+]} />
+
+---
+
+## 3. Color
+
+<Swatch name="primary" />
+<Swatch name="secondary" />
+<Swatch name="accent" />
+
+### Contrast matrix
+See `tokens.report.json` for the full WCAG contrast matrix. Every text × bg combination in this doc meets AA minimum.
+
+---
+
+## 4. Typography
+
+<TypeSpecimen family="display" />
+<TypeSpecimen family="text" />
+<TypeSpecimen family="mono" />
+
+### Scale
+Base 16px, ratio {{ typeScale.ratio }}. Use tokens `font-size-{xs,sm,base,md,lg,xl,2xl,...}`.
+
+---
+
+## 5. Voice & Tone
+
+**Use:** {{ voice.vocabulary | join(", ") }}
+**Avoid:** {{ voice.avoid | join(", ") }}
+**Sentence shape:** {{ voice.sentence_shape }}
+
+---
+
+## 6. Imagery & Iconography
+
+{{ imageryDirection }}
+
+---
+
+## 7. Motion
+
+<MotionClip name="hero-entry" />
+<MotionClip name="card-hover" />
+
+All motion respects `prefers-reduced-motion: reduce`.
+
+---
+
+## 8. Application
+
+See `/social/` for ready-to-use social assets, `/exports/` for PDF/EPS logos.
+
+---
+
+## 9. Do / Don't Gallery
+
+<DoDont large items={doDontGallery} />

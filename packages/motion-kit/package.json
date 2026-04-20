@@ -1,0 +1,19 @@
+{
+  "name": "@atelier/motion-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared motion presets: easing tokens, reduced-motion helpers, GSAP/Framer recipes.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "devDependencies": { "typescript": "^5.6.3" },
+  "peerDependencies": {
+    "framer-motion": "^11.0.0",
+    "gsap": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "framer-motion": { "optional": true },
+    "gsap": { "optional": true }
+  }
+}

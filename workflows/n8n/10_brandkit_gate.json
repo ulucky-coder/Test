@@ -1,0 +1,106 @@
+{
+  "name": "10_brandkit_gate",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brandkit/gate",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-gate-in",
+      "name": "Webhook: Phase Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { client_id, slug, kind, status, reviewer } = $json.body;\nif (!client_id || !kind || !status) {\n  return [{ json: { error: 'missing fields', ok: false } }];\n}\nreturn [{ json: { client_id, slug, kind, status, reviewer: reviewer ?? null } }];"
+      },
+      "id": "validate-payload",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "conditions": [{ "leftValue": "={{$json.status}}", "rightValue": "ready_for_review", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "ready_for_review" },
+            { "conditions": { "conditions": [{ "leftValue": "={{$json.status}}", "rightValue": "approved", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "approved" },
+            { "conditions": { "conditions": [{ "leftValue": "={{$json.status}}", "rightValue": "revise", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "revise" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-status",
+      "name": "Route by Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.ATELIER_NOTIFY_WEBHOOK}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"phase_ready\",\n  \"slug\": \"{{$json.slug}}\",\n  \"kind\": \"{{$json.kind}}\"\n}",
+        "options": {}
+      },
+      "id": "notify-reviewer",
+      "name": "Notify Reviewer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [940, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.ATELIER_NOTIFY_WEBHOOK}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"phase_approved\",\n  \"slug\": \"{{$json.slug}}\",\n  \"kind\": \"{{$json.kind}}\",\n  \"reviewer\": \"{{$json.reviewer}}\"\n}",
+        "options": {}
+      },
+      "id": "notify-approved",
+      "name": "Notify Approved",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.ATELIER_NOTIFY_WEBHOOK}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"phase_revise\",\n  \"slug\": \"{{$json.slug}}\",\n  \"kind\": \"{{$json.kind}}\"\n}",
+        "options": {}
+      },
+      "id": "notify-revise",
+      "name": "Notify Revise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [940, 400]
+    }
+  ],
+  "connections": {
+    "Webhook: Phase Event": { "main": [[{ "node": "Validate Payload", "type": "main", "index": 0 }]] },
+    "Validate Payload": { "main": [[{ "node": "Route by Status", "type": "main", "index": 0 }]] },
+    "Route by Status": {
+      "main": [
+        [{ "node": "Notify Reviewer", "type": "main", "index": 0 }],
+        [{ "node": "Notify Approved", "type": "main", "index": 0 }],
+        [{ "node": "Notify Revise", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": ["brandkit", "gate"],
+  "triggerCount": 1,
+  "versionId": "1.0.0"
+}

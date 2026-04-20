@@ -1,0 +1,25 @@
+name: Visual Regression
+on:
+  pull_request:
+    paths: ['apps/web/**', 'clients/**/site/**', 'packages/**']
+jobs:
+  vis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter ./apps/web exec playwright install --with-deps chromium
+      - run: pnpm --filter ./apps/web build
+      - run: pnpm --filter ./apps/web start &
+      - name: wait for server
+        run: npx wait-on http://localhost:3000 -t 30000
+      - run: pnpm --filter ./apps/web test:visual
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-visual-report
+          path: apps/web/playwright-report
